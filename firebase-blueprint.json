@@ -1,0 +1,93 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account identity and role configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 50, "pattern": "^[a-zA-Z0-9_]+$" },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "enum": ["admin", "moderator", "vip", "member"] },
+        "status": { "type": "string", "enum": ["active", "suspended", "pending"] },
+        "avatarUrl": { "type": "string", "maxLength": 500 },
+        "bio": { "type": "string", "maxLength": 500 },
+        "watchlistCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "username", "displayName", "email", "role", "status"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "System administrator designation record",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "enum": ["admin"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "email", "role"]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "Anime entry tracked in user personal watchlist",
+      "type": "object",
+      "properties": {
+        "animeId": { "type": "number" },
+        "status": { "type": "string", "enum": ["WATCHING", "PLANNING", "COMPLETED", "DROPPED"] },
+        "userScore": { "type": "number" },
+        "lastWatchedEpisode": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["animeId", "status", "lastWatchedEpisode"]
+    },
+    "FavoriteItem": {
+      "title": "FavoriteItem",
+      "description": "Saved favorite anime bookmark",
+      "type": "object",
+      "properties": {
+        "animeId": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["animeId"]
+    },
+    "WatchHistoryItem": {
+      "title": "WatchHistoryItem",
+      "description": "Playback session record with timestamp and episode progress",
+      "type": "object",
+      "properties": {
+        "animeId": { "type": "number" },
+        "episode": { "type": "number" },
+        "progressSeconds": { "type": "number" },
+        "totalDurationSeconds": { "type": "number" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["animeId", "episode", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Public and identity details for authenticated users"
+    },
+    "/admins/{userId}": {
+      "schema": "AdminRecord",
+      "description": "Privileged administrator registry for authorization"
+    },
+    "/users/{userId}/watchlist/{animeId}": {
+      "schema": "WatchlistItem",
+      "description": "User anime watchlist entries"
+    },
+    "/users/{userId}/favorites/{animeId}": {
+      "schema": "FavoriteItem",
+      "description": "User favorited anime list"
+    },
+    "/users/{userId}/history/{animeId}": {
+      "schema": "WatchHistoryItem",
+      "description": "User anime watch history records"
+    }
+  }
+}

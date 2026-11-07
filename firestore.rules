@@ -1,0 +1,134 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Deny All Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'benilin40@gmail.com'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // User Profile Validation Helper
+    function isValidUserProfile(data, userId) {
+      return (
+        ('id' in data && data.id is string && data.id == userId) ||
+        ('uid' in data && data.uid is string && data.uid == userId)
+      )
+      && (!('id' in data) || (data.id is string && data.id == userId))
+      && (!('uid' in data) || (data.uid is string && data.uid == userId))
+      && data.username is string && data.username.size() >= 3 && data.username.size() <= 50 && data.username.matches('^[a-zA-Z0-9_]+$')
+      && data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100
+      && data.email is string && data.email.size() <= 150
+      && data.role in ['admin', 'moderator', 'vip', 'member', 'USER', 'ADMIN', 'SUPER_ADMIN']
+      && (!('status' in data) || data.status in ['active', 'suspended', 'pending'])
+      && (!('accountStatus' in data) || data.accountStatus in ['active', 'suspended', 'pending'])
+      && (!('bio' in data) || (data.bio is string && data.bio.size() <= 500))
+      && (!('avatarUrl' in data) || (data.avatarUrl is string && data.avatarUrl.size() <= 500))
+      && (!('watchlistCount' in data) || data.watchlistCount is number)
+      && (!('createdAt' in data) || data.createdAt is number)
+      && (!('updatedAt' in data) || data.updatedAt is number)
+      && (!('lastLoginAt' in data) || data.lastLoginAt is number);
+    }
+
+    // Watchlist Item Validation Helper
+    function isValidWatchlistItem(data) {
+      return data.keys().hasAll(['animeId', 'status', 'lastWatchedEpisode'])
+        && data.animeId is number
+        && data.status in ['WATCHING', 'PLANNING', 'COMPLETED', 'DROPPED']
+        && data.lastWatchedEpisode is number && data.lastWatchedEpisode >= 0
+        && (!('userScore' in data) || data.userScore == null || (data.userScore is number && data.userScore >= 0 && data.userScore <= 10));
+    }
+
+    // Connectivity probe collection
+    match /test/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Administrator Registry
+    match /admins/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // User Profiles
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && (incoming().role in ['member', 'USER'] || isAdmin()); // prevent self-assigned admin or super admin role
+
+      allow update: if isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && (
+          isAdmin() || (
+            isOwner(userId)
+            && incoming().role == existing().role // users cannot escalate role
+            && (!('status' in incoming()) || !('status' in existing()) || incoming().status == existing().status) // users cannot change status
+            && (!('accountStatus' in incoming()) || !('accountStatus' in existing()) || incoming().accountStatus == existing().accountStatus)
+          )
+        );
+
+      allow delete: if isAdmin();
+
+      // Subcollection: Watchlist
+      match /watchlist/{animeId} {
+        allow get, list: if isOwner(userId) || isAdmin();
+        allow create, update: if (isOwner(userId) || isAdmin())
+          && isValidWatchlistItem(incoming());
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      // Subcollection: Favorites
+      match /favorites/{animeId} {
+        allow get, list: if isOwner(userId) || isAdmin();
+        allow create, update: if (isOwner(userId) || isAdmin())
+          && incoming().keys().hasAll(['animeId'])
+          && incoming().animeId is number;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+
+      // Subcollection: Watch History
+      match /history/{animeId} {
+        allow get, list: if isOwner(userId) || isAdmin();
+        allow create, update: if (isOwner(userId) || isAdmin())
+          && incoming().keys().hasAll(['animeId', 'episode', 'timestamp'])
+          && incoming().animeId is number
+          && incoming().episode is number
+          && incoming().timestamp is number;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+  }
+}

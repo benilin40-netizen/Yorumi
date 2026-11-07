@@ -1,0 +1,6 @@
+{
+  "name": "YORUMI — Premium Anime Streaming & Discovery",
+  "description": "Your World. Your Anime. Discover trending anime, track release countdowns, stream episodes across providers, and read real-time anime news.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
