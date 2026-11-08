@@ -1,11 +1,11 @@
-const JIKAN_BASE_URL = 'https://api.jikan.moe/v4';
+import { safeFetchJson } from '../utils/apiClient';
 
 interface JikanCacheItem<T> {
   data: T;
   timestamp: number;
 }
 const jikanCache = new Map<string, JikanCacheItem<any>>();
-const JIKAN_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const JIKAN_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
 export async function fetchJikanNews(malId: number): Promise<any[]> {
   const cacheKey = `jikan_news_${malId}`;
@@ -14,31 +14,46 @@ export async function fetchJikanNews(malId: number): Promise<any[]> {
     return cached.data;
   }
 
-  try {
-    const response = await fetch(`${JIKAN_BASE_URL}/anime/${malId}/news`);
-    if (!response.ok) {
-      if (response.status === 429) {
-        console.warn('Jikan API rate limit hit.');
-      }
-      return [];
-    }
-    const json = await response.json();
-    const articles = json.data || [];
+  // Try backend proxy endpoint first
+  const proxyResult = await safeFetchJson<{ data?: any[] }>(`/api/jikan/news/${malId}`, { timeoutMs: 6000 });
+  if (proxyResult.ok && Array.isArray(proxyResult.data?.data)) {
+    const articles = proxyResult.data!.data!;
     jikanCache.set(cacheKey, { data: articles, timestamp: Date.now() });
     return articles;
-  } catch (err) {
-    console.error(`Error fetching Jikan news for MAL ID ${malId}:`, err);
-    return [];
   }
+
+  // Fallback to direct Jikan API request
+  const directResult = await safeFetchJson<{ data?: any[] }>(`https://api.jikan.moe/v4/anime/${malId}/news`, { timeoutMs: 6000 });
+  if (directResult.ok && Array.isArray(directResult.data?.data)) {
+    const articles = directResult.data!.data!;
+    jikanCache.set(cacheKey, { data: articles, timestamp: Date.now() });
+    return articles;
+  }
+
+  return [];
 }
 
-export async function testJikanConnectivity(): Promise<{ ok: boolean; latencyMs: number }> {
+export async function testJikanConnectivity(): Promise<{
+  ok: boolean;
+  latencyMs: number;
+  contentType?: string;
+  errorPreview?: string;
+}> {
   const start = Date.now();
-  try {
-    const res = await fetch(`${JIKAN_BASE_URL}/anime/1`, { method: 'GET' });
-    const latencyMs = Date.now() - start;
-    return { ok: res.ok, latencyMs };
-  } catch (err) {
-    return { ok: false, latencyMs: Date.now() - start };
+  const res = await safeFetchJson<{ status?: string }>('/api/jikan/anime/1', { timeoutMs: 5000 });
+  const latencyMs = Date.now() - start;
+
+  if (res.ok) {
+    return { ok: true, latencyMs, contentType: res.contentType };
   }
+
+  // Fallback to direct ping
+  const directStart = Date.now();
+  const directRes = await safeFetchJson('https://api.jikan.moe/v4/anime/1', { timeoutMs: 5000 });
+  return {
+    ok: directRes.ok,
+    latencyMs: Date.now() - directStart,
+    contentType: directRes.contentType,
+    errorPreview: directRes.errorPreview || res.errorPreview,
+  };
 }

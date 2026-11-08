@@ -78,7 +78,9 @@ export function saveEpisodeTitleOverride(animeId: number, episodeNumber: number,
   localStorage.setItem(EPISODE_TITLES_KEY, JSON.stringify(titles));
 }
 
-// Fetch official titles from Jikan API with local caching
+// Fetch official titles from Jikan API with local caching and safe response parsing
+import { safeFetchJson } from '../utils/apiClient';
+
 const jikanTitleCache = new Map<number, Record<number, { title: string; synopsis?: string }>>();
 
 export async function fetchOfficialEpisodeTitles(
@@ -92,12 +94,21 @@ export async function fetchOfficialEpisodeTitles(
   if (!malId) return {};
 
   try {
-    const res = await fetch(`https://api.jikan.moe/v4/anime/${malId}/episodes`);
-    if (!res.ok) return {};
-    const json = await res.json();
-    const dataList = json.data || [];
+    // Attempt 1: Backend proxy route
+    let result = await safeFetchJson<{ data?: any[] }>(`/api/jikan/anime/${malId}/episodes`, { timeoutMs: 6000 });
 
+    // Attempt 2: Direct Jikan API fallback if proxy didn't succeed
+    if (!result.ok || !result.data?.data) {
+      result = await safeFetchJson<{ data?: any[] }>(`https://api.jikan.moe/v4/anime/${malId}/episodes`, { timeoutMs: 6000 });
+    }
+
+    if (!result.ok || !result.data || !Array.isArray(result.data.data)) {
+      return {};
+    }
+
+    const dataList = result.data.data;
     const map: Record<number, { title: string; synopsis?: string }> = {};
+
     dataList.forEach((ep: any) => {
       const epNum = ep.mal_id || ep.episode;
       const t = ep.title || ep.title_romanji || ep.title_japanese;
