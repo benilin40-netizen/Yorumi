@@ -2,15 +2,19 @@ import { Anime } from '../types/anime';
 import { aniListManager } from './anilistManager';
 import { getWatchlist } from './storage';
 
+export type NotificationCategory = 'all' | 'airing' | 'aired' | 'new_anime' | 'seasons' | 'announcements' | 'account' | 'system';
+
 export interface NotificationPreference {
   airingReminders: boolean;
   airedAlerts: boolean;
-  availableAlerts: boolean;
   newAnimeAlerts: boolean;
+  seasonAlerts: boolean;
   announcements: boolean;
-  reminderIntervalMinutes: number; // 10, 30
+  accountAlerts: boolean;
+  reminderIntervalMinutes: number; // 15, 30, 60
   pushEnabled: boolean;
   timezone: string;
+  preferredFormats: string[]; // TV, MOVIE, OVA, ONA, SPECIAL
 }
 
 export interface YorumiNotification {
@@ -20,7 +24,7 @@ export interface YorumiNotification {
   time: string;
   timestamp: number;
   unread: boolean;
-  type: 'airing' | 'aired' | 'available' | 'news' | 'system' | 'announcement';
+  type: NotificationCategory;
   animeId?: number;
   animeTitle?: string;
   coverImage?: string;
@@ -28,19 +32,21 @@ export interface YorumiNotification {
   actionUrl?: string;
 }
 
-const NOTIFICATION_PREFS_KEY = 'yorumi_notification_prefs_v2';
-const NOTIFICATIONS_KEY = 'yorumi_notifications_v2';
+const NOTIFICATION_PREFS_KEY = 'yorumi_notification_prefs_v3';
+const NOTIFICATIONS_KEY = 'yorumi_notifications_v3';
 const SUBSCRIBED_ANIME_KEY = 'yorumi_subscribed_anime_ids';
 
 const DEFAULT_PREFS: NotificationPreference = {
   airingReminders: true,
   airedAlerts: true,
-  availableAlerts: true,
   newAnimeAlerts: true,
+  seasonAlerts: true,
   announcements: true,
+  accountAlerts: true,
   reminderIntervalMinutes: 30,
   pushEnabled: false,
   timezone: 'Africa/Kampala',
+  preferredFormats: ['TV', 'MOVIE', 'OVA', 'ONA', 'SPECIAL'],
 };
 
 export function getNotificationPreferences(): NotificationPreference {
@@ -79,7 +85,7 @@ export function addNotification(notif: Omit<YorumiNotification, 'id' | 'timestam
   };
 
   current.unshift(newNotif);
-  const trimmed = current.slice(0, 100);
+  const trimmed = current.slice(0, 150);
   saveNotifications(trimmed);
 
   // Trigger browser push if enabled
@@ -123,7 +129,6 @@ export function getSubscribedAnimeIds(): number[] {
     if (raw) return JSON.parse(raw);
   } catch {}
 
-  // Default to watchlist anime IDs
   const watchlist = getWatchlist();
   const ids = watchlist.map((w) => w.anime.id);
   localStorage.setItem(SUBSCRIBED_ANIME_KEY, JSON.stringify(ids));
@@ -144,7 +149,26 @@ export function toggleAnimeSubscription(animeId: number): boolean {
   return isSubscribed;
 }
 
-// Background scheduler / checker for airing schedule
+// Registration notification helpers
+export function notifyNewUserRegistration(username: string, email: string) {
+  // Admin alert
+  addNotification({
+    title: `New User Registration: @${username}`,
+    message: `Account created successfully. Email: ${email}. Status: Active.`,
+    type: 'account',
+  });
+}
+
+export function notifyWelcomeUser(displayName: string) {
+  // User welcome alert
+  addNotification({
+    title: `Welcome to Yorumi, ${displayName}!`,
+    message: 'Your account has been successfully created. Explore the anime catalogue and customize your notification preferences.',
+    type: 'account',
+  });
+}
+
+// Background checker for airing schedules & new releases
 export async function checkAiringScheduleAndNotify(): Promise<void> {
   const prefs = getNotificationPreferences();
   if (!prefs.airingReminders && !prefs.airedAlerts) return;
@@ -152,7 +176,7 @@ export async function checkAiringScheduleAndNotify(): Promise<void> {
   try {
     const query = `
       query {
-        Page(page: 1, perPage: 20) {
+        Page(page: 1, perPage: 25) {
           airingSchedules(notYetAired: true, sort: TIME_ASC) {
             id
             episode
@@ -167,6 +191,7 @@ export async function checkAiringScheduleAndNotify(): Promise<void> {
               coverImage {
                 large
               }
+              format
             }
           }
         }
@@ -180,7 +205,6 @@ export async function checkAiringScheduleAndNotify(): Promise<void> {
 
     for (const sch of schedules) {
       const animeId = sch.media.id;
-      // If user subscribed or has it in watchlist
       if (!subscribedIds.includes(animeId)) continue;
 
       const title = sch.media.title.english || sch.media.title.romaji;
@@ -188,12 +212,12 @@ export async function checkAiringScheduleAndNotify(): Promise<void> {
       const timeUntil = sch.timeUntilAiring; // seconds
 
       // 30 min reminder (approx 1800s)
-      if (prefs.airingReminders && timeUntil <= 1800 && timeUntil > 1500) {
+      if (prefs.airingReminders && timeUntil <= 1800 && timeUntil > 1200) {
         const notifId = `airing_30_${sch.id}`;
         if (!existingNotifs.some((n) => n.id === notifId)) {
           addNotification({
-            title: `Upcoming Airing: ${title}`,
-            message: `Episode ${sch.episode} starts airing in ~30 minutes!`,
+            title: `Upcoming Episode: ${title}`,
+            message: `Episode ${sch.episode} starts airing in ~30 minutes. Get ready!`,
             type: 'airing',
             animeId,
             animeTitle: title,
@@ -203,13 +227,13 @@ export async function checkAiringScheduleAndNotify(): Promise<void> {
         }
       }
 
-      // 10 min reminder (approx 600s)
-      if (prefs.airingReminders && timeUntil <= 600 && timeUntil > 300) {
-        const notifId = `airing_10_${sch.id}`;
+      // 15 min reminder (approx 900s)
+      if (prefs.airingReminders && timeUntil <= 900 && timeUntil > 300) {
+        const notifId = `airing_15_${sch.id}`;
         if (!existingNotifs.some((n) => n.id === notifId)) {
           addNotification({
             title: `Starting Soon: ${title}`,
-            message: `Episode ${sch.episode} airs in 10 minutes. Get ready!`,
+            message: `Episode ${sch.episode} airs in 15 minutes!`,
             type: 'airing',
             animeId,
             animeTitle: title,

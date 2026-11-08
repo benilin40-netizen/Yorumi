@@ -24,21 +24,19 @@ import {
   loginWithEmailOrUsername,
   createOrRetryUserProfile,
 } from '../services/firebase';
-
-interface NotificationItem {
-  id: string;
-  title: string;
-  message: string;
-  time: string;
-  unread: boolean;
-  type: 'airing' | 'news' | 'system';
-}
+import {
+  YorumiNotification,
+  getNotifications,
+  markAllNotificationsRead,
+  notifyNewUserRegistration,
+  notifyWelcomeUser,
+} from '../services/notificationService';
 
 interface UserContextType {
   watchlist: WatchlistItem[];
   favorites: Anime[];
   history: WatchHistoryItem[];
-  notifications: NotificationItem[];
+  notifications: YorumiNotification[];
   unreadNotificationCount: number;
   currentUser: UserAccount;
   userAccounts: UserAccount[];
@@ -106,32 +104,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthRecoveryUser(null);
   };
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: '1',
-      title: 'Solo Leveling Season 2',
-      message: 'New episode released today! Watch Episode 12 now.',
-      time: '10m ago',
-      unread: true,
-      type: 'airing',
-    },
-    {
-      id: '2',
-      title: 'Chainsaw Man Movie Announcement',
-      message: 'Reze Arc feature film release window confirmed in latest news.',
-      time: '2h ago',
-      unread: true,
-      type: 'news',
-    },
-    {
-      id: '3',
-      title: 'Yorumi Local Storage Engine Active',
-      message: 'All accounts, watchlists, and settings saved securely in your browser.',
-      time: 'Just now',
-      unread: true,
-      type: 'system',
-    },
-  ]);
+  const [notifications, setNotifications] = useState<YorumiNotification[]>(() => getNotifications());
 
   // Initial load
   useEffect(() => {
@@ -139,6 +112,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setFavorites(getFavorites());
     setHistory(getWatchHistory());
     setUserAccounts(getUserAccounts());
+    setNotifications(getNotifications());
     const current = getCurrentUser();
     setCurrentUserState(current);
     if (current && current.id !== 'guest') {
@@ -168,6 +142,9 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setStorageCurrentUser(user.id);
     setFirebaseUser({ uid: user.id, email: user.email, emailVerified: true });
     setUserAccounts(getUserAccounts());
+    notifyNewUserRegistration(user.username, user.email);
+    notifyWelcomeUser(user.displayName);
+    setNotifications(getNotifications());
     return user;
   };
 
@@ -237,7 +214,8 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const markNotificationsRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })));
+    const updated = markAllNotificationsRead();
+    setNotifications([...updated]);
   };
 
   const createUser = async (data: Omit<UserAccount, 'id' | 'createdAt'>): Promise<UserAccount> => {

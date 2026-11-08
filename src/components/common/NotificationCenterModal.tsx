@@ -4,23 +4,14 @@ import {
   Bell,
   CheckCheck,
   Trash2,
-  Settings,
   Search,
-  Filter,
-  Radio,
   Tv,
-  CheckCircle2,
-  Megaphone,
-  AlertCircle,
-  Clock,
-  Shield,
   Sliders,
 } from 'lucide-react';
 import {
   YorumiNotification,
   NotificationPreference,
   getNotifications,
-  saveNotifications,
   getNotificationPreferences,
   saveNotificationPreferences,
   markAllNotificationsRead,
@@ -41,7 +32,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 }) => {
   const [notifications, setNotifications] = useState<YorumiNotification[]>([]);
   const [prefs, setPrefs] = useState<NotificationPreference>(getNotificationPreferences());
-  const [activeTab, setActiveTab] = useState<'all' | 'airing' | 'aired' | 'available' | 'news' | 'system' | 'prefs'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'airing' | 'aired' | 'new_anime' | 'seasons' | 'announcements' | 'account' | 'prefs'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
 
@@ -79,11 +70,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 
   const filteredNotifications = notifications.filter((n) => {
     if (unreadOnly && !n.unread) return false;
-    if (activeTab === 'airing' && n.type !== 'airing') return false;
-    if (activeTab === 'aired' && n.type !== 'aired') return false;
-    if (activeTab === 'available' && n.type !== 'available') return false;
-    if (activeTab === 'news' && n.type !== 'news' && n.type !== 'announcement') return false;
-    if (activeTab === 'system' && n.type !== 'system') return false;
+    if (activeTab !== 'all' && activeTab !== 'prefs' && n.type !== activeTab) return false;
 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -115,7 +102,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                 )}
               </div>
               <p className="text-xs text-[#a1a1aa] font-sans">
-                Real-time airing alerts, release schedules, and system announcements
+                Real-time airing alerts, release schedules, and account updates
               </p>
             </div>
           </div>
@@ -136,11 +123,12 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
             <div className="flex flex-wrap gap-1.5 bg-[#0d0b14] p-1 rounded-2xl border border-[#2a243a] text-xs font-semibold">
               {[
                 { id: 'all', label: 'All' },
-                { id: 'airing', label: 'Airing' },
+                { id: 'airing', label: 'Upcoming' },
                 { id: 'aired', label: 'Aired' },
-                { id: 'available', label: 'Available' },
-                { id: 'news', label: 'News' },
-                { id: 'system', label: 'System' },
+                { id: 'new_anime', label: 'New Anime' },
+                { id: 'seasons', label: 'Seasons' },
+                { id: 'announcements', label: 'Announcements' },
+                { id: 'account', label: 'Account' },
                 { id: 'prefs', label: 'Preferences', icon: Sliders },
               ].map((tab) => (
                 <button
@@ -238,19 +226,6 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                     type="checkbox"
                     checked={prefs.airedAlerts}
                     onChange={(e) => handleSavePrefs({ ...prefs, airedAlerts: e.target.checked })}
-                    className="w-4 h-4 accent-purple-600 rounded"
-                  />
-                </label>
-
-                <label className="flex items-center justify-between p-3 bg-[#0d0b14] rounded-2xl border border-[#2a243a] cursor-pointer">
-                  <div>
-                    <span className="font-bold text-white block">Available on Yorumi Alerts</span>
-                    <span className="text-[11px] text-zinc-400">Notify when playable episodes are verified & available</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={prefs.availableAlerts}
-                    onChange={(e) => handleSavePrefs({ ...prefs, availableAlerts: e.target.checked })}
                     className="w-4 h-4 accent-purple-600 rounded"
                   />
                 </label>
