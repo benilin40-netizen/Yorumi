@@ -43,6 +43,8 @@ export interface AnimeTrailer {
   thumbnail?: string | null;
 }
 
+export type EpisodeStatus = 'upcoming' | 'airing' | 'released' | 'delayed' | 'unavailable';
+
 export interface AiringEpisode {
   id: number;
   episode: number;

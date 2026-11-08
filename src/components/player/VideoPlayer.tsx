@@ -15,6 +15,9 @@ import {
   Check,
   RefreshCw,
   Info,
+  X,
+  FastForward,
+  Sparkles,
 } from 'lucide-react';
 import Hls from 'hls.js';
 import { Anime, AudioOption } from '../../types/anime';
@@ -26,6 +29,7 @@ import {
   getProviderConfig,
 } from '../../services/streaming/providerManager';
 import { useUser } from '../../contexts/UserContext';
+import { getNextPlayableEpisode, EpisodeInfo } from '../../services/episodeService';
 
 interface VideoPlayerProps {
   anime: Anime;
@@ -41,6 +45,8 @@ interface StreamDiagnosticLog {
   message: string;
 }
 
+const AUTOPLAY_STORAGE_KEY = 'yorumi_autoplay_next_v1';
+
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   anime,
   currentEpisode,
@@ -55,8 +61,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [theaterMode, setTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Auto-Play Next & Preview Overlay State
+  const [autoPlayNext, setAutoPlayNext] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(AUTOPLAY_STORAGE_KEY);
+      return saved !== null ? JSON.parse(saved) : true;
+    } catch {
+      return true;
+    }
+  });
+  const [showNextOverlay, setShowNextOverlay] = useState<boolean>(false);
+  const [nextCountdown, setNextCountdown] = useState<number>(10);
+  const [nextEpInfo, setNextEpInfo] = useState<EpisodeInfo | null>(null);
+  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // Synchronization & Diagnostics State
-  const [audioDelayMs, setAudioDelayMs] = useState<number>(0); // -500ms to +500ms
+  const [audioDelayMs, setAudioDelayMs] = useState<number>(0);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnosticLogs, setDiagnosticLogs] = useState<StreamDiagnosticLog[]>([]);
   const [bufferHealth, setBufferHealth] = useState<string>('Normal');
@@ -89,11 +109,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     ]);
   };
 
-  // Record history & reset error state on parameters change
+  // Toggle Auto-Play Preference
+  const handleToggleAutoPlay = (enabled: boolean) => {
+    setAutoPlayNext(enabled);
+    localStorage.setItem(AUTOPLAY_STORAGE_KEY, JSON.stringify(enabled));
+    if (!enabled && countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+    }
+  };
+
+  // Check next episode availability & reset overlays when episode changes
   useEffect(() => {
     addHistoryRecord(anime, currentEpisode, 120);
     setHasError(false);
     setIsLoading(true);
+    setShowNextOverlay(false);
+    setNextCountdown(10);
+
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+
+    const nextPlayable = getNextPlayableEpisode(anime, currentEpisode);
+    setNextEpInfo(nextPlayable);
+
     addLog(`Initialized player for "${title}" Ep ${currentEpisode} [${activeProvider.toUpperCase()} - ${audio.toUpperCase()}]`);
   }, [anime.id, currentEpisode, activeProvider, audio, mirrorIndex]);
 
@@ -155,7 +195,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     return () => {
-      // Thorough cleanup preventing ghost audio & timeline leaks
       if (currentHls) {
         currentHls.detachMedia();
         currentHls.destroy();
@@ -170,13 +209,47 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [config.url, config.isHls]);
 
-  // Apply audio delay correction if user adjusted sync slider
-  useEffect(() => {
-    if (!videoRef.current) return;
-    if (audioDelayMs !== 0) {
-      addLog(`Applied user audio synchronization offset: ${audioDelayMs}ms`);
+  // Handle Video Time Update & Ended Event for Auto-Play Countdown
+  const triggerAutoPlayCountdown = () => {
+    if (showNextOverlay || !nextEpInfo) return;
+
+    setShowNextOverlay(true);
+    setNextCountdown(10);
+
+    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+
+    countdownTimerRef.current = setInterval(() => {
+      setNextCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(countdownTimerRef.current!);
+          countdownTimerRef.current = null;
+          if (autoPlayNext && nextEpInfo) {
+            onEpisodeChange(nextEpInfo.episodeNumber);
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleCancelAutoPlay = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
     }
-  }, [audioDelayMs]);
+    setShowNextOverlay(false);
+  };
+
+  const handlePlayNow = () => {
+    if (countdownTimerRef.current) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    if (nextEpInfo) {
+      onEpisodeChange(nextEpInfo.episodeNumber);
+    }
+  };
 
   const handleProviderSelect = (providerId: ProviderId) => {
     setActiveProvider(providerId);
@@ -215,6 +288,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Auto-Play Next Toggle Pill */}
+          <button
+            onClick={() => handleToggleAutoPlay(!autoPlayNext)}
+            className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${
+              autoPlayNext
+                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
+                : 'bg-zinc-800/60 text-zinc-400 border border-zinc-700'
+            }`}
+            title="Toggle Auto-Play Next Episode"
+          >
+            <FastForward className="w-3.5 h-3.5" />
+            <span>Auto-Play: {autoPlayNext ? 'ON' : 'OFF'}</span>
+          </button>
+
           {/* Audio Selector (SUB / DUB) */}
           <div className="flex items-center p-0.5 bg-[#161321] rounded-full border border-[#2a243a] text-xs">
             <button
@@ -268,7 +355,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       </div>
 
-      {/* Video Viewport & Diagnostics Overlay */}
+      {/* Video Viewport & Overlay Panels */}
       <div className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden">
         {isLoading && !hasError && (
           <div className="absolute inset-0 z-20 bg-black/75 flex flex-col items-center justify-center gap-3">
@@ -310,6 +397,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             playsInline
             className="w-full h-full object-contain"
             onPlay={() => setIsLoading(false)}
+            onEnded={triggerAutoPlayCountdown}
+            onTimeUpdate={(e) => {
+              const el = e.currentTarget;
+              if (el.duration && el.duration - el.currentTime <= 10 && !showNextOverlay && nextEpInfo) {
+                triggerAutoPlayCountdown();
+              }
+            }}
             onWaiting={() => {
               setBufferHealth('Stalled / Buffering');
               addLog('Playback buffering stalled', 'warn');
@@ -338,6 +432,54 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               addLog('Embed iframe failed to load stream URL', 'error');
             }}
           />
+        )}
+
+        {/* Next Episode Auto-Play Preview Overlay */}
+        {showNextOverlay && nextEpInfo && (
+          <div className="absolute bottom-6 right-6 z-40 bg-[#0d0b14]/95 border border-purple-500/50 p-4 rounded-2xl shadow-2xl backdrop-blur-md max-w-sm w-full animate-in slide-in-from-bottom font-sans">
+            <div className="flex items-center justify-between border-b border-[#2a243a] pb-2.5 mb-3">
+              <div className="flex items-center gap-2">
+                <FastForward className="w-4 h-4 text-purple-400" />
+                <span className="font-display font-bold text-white text-xs uppercase tracking-wider">
+                  Up Next · Ep {nextEpInfo.episodeNumber}
+                </span>
+              </div>
+              <button
+                onClick={handleCancelAutoPlay}
+                className="text-[#a1a1aa] hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex items-start gap-3">
+              <img
+                src={nextEpInfo.thumbnail || anime.coverImage.large}
+                alt={nextEpInfo.title}
+                className="w-16 h-20 rounded-xl object-cover border border-[#2a243a] shrink-0"
+              />
+              <div className="space-y-1 min-w-0 flex-1">
+                <h4 className="text-xs font-bold text-white line-clamp-2">{nextEpInfo.title}</h4>
+                <p className="text-[11px] text-purple-300 font-mono">
+                  Starting in <strong className="text-white font-bold">{nextCountdown}s</strong>
+                </p>
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    onClick={handlePlayNow}
+                    className="px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white font-bold text-xs rounded-full shadow flex items-center gap-1 transition-all"
+                  >
+                    <Play className="w-3 h-3 fill-current" /> Play Now
+                  </button>
+                  <button
+                    onClick={handleCancelAutoPlay}
+                    className="px-3 py-1.5 bg-[#161321] hover:bg-[#201c2e] border border-[#2a243a] text-[#a1a1aa] hover:text-white text-xs font-semibold rounded-full transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Diagnostics Modal / Overlay Panel */}
@@ -377,20 +519,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   <span className="text-amber-300">{recoveryCount}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Active Sync Offset:</span>
-                  <span className="text-purple-400">{audioDelayMs} ms</span>
+                  <span>Auto-Play Next:</span>
+                  <span className={autoPlayNext ? 'text-purple-400 font-bold' : 'text-zinc-500'}>
+                    {autoPlayNext ? 'ENABLED' : 'DISABLED'}
+                  </span>
                 </div>
               </div>
 
-              {/* Audio Delay Control Inside Diagnostics */}
+              {/* Audio Delay Control */}
               <div className="p-3 bg-[#161321] rounded-xl border border-[#2a243a] space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-white font-display text-xs">Audio Lip-Sync Offset</span>
                   <span className="text-purple-400 text-xs font-bold">{audioDelayMs} ms</span>
                 </div>
-                <p className="text-[10px] text-zinc-400 leading-tight">
-                  Temporary offset for mismatched provider streams (-500ms to +500ms in 50ms increments).
-                </p>
                 <div className="flex items-center gap-2 pt-1">
                   <input
                     type="range"
@@ -504,8 +645,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </span>
 
           <button
-            disabled={currentEpisode >= totalEpisodes}
-            onClick={() => onEpisodeChange(currentEpisode + 1)}
+            disabled={!nextEpInfo}
+            onClick={() => {
+              if (nextEpInfo) onEpisodeChange(nextEpInfo.episodeNumber);
+            }}
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 disabled:opacity-40 text-white text-xs font-bold rounded-full shadow transition-all"
           >
             Next Ep

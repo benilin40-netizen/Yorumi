@@ -6,12 +6,22 @@ import {
   Heart,
   Film,
   ArrowLeft,
+  Lock,
+  Calendar,
+  Clock,
+  CheckCircle2,
 } from 'lucide-react';
 import { Anime, WatchStatus } from '../types/anime';
 import { getAnimeById } from '../services/anilist';
 import { useUser } from '../contexts/UserContext';
 import { AnimeCarousel } from '../components/anime/AnimeCarousel';
 import { CountdownCard } from '../components/countdown/CountdownCard';
+import {
+  calculateAnimeEpisodeSchedule,
+  isEpisodePlayable,
+  syncEpisodeReleasesAndNotify,
+  AnimeEpisodeSchedule,
+} from '../services/episodeService';
 
 interface AnimeDetailsProps {
   animeId: number;
@@ -35,6 +45,9 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
       setLoading(true);
       const data = await getAnimeById(animeId);
       setAnime(data);
+      if (data) {
+        syncEpisodeReleasesAndNotify(data);
+      }
       setLoading(false);
     }
     load();
@@ -68,6 +81,10 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
   const favorited = isFavorite(anime.id);
   const studioName = anime.studios?.nodes?.[0]?.name;
   const scoreFormatted = anime.averageScore ? (anime.averageScore / 10).toFixed(1) : '8.4';
+
+  const schedule: AnimeEpisodeSchedule = calculateAnimeEpisodeSchedule(anime);
+  const ep1Check = isEpisodePlayable(anime, 1);
+  const latestEpToWatch = schedule.latestReleasedEpisode > 0 ? schedule.latestReleasedEpisode : 1;
 
   return (
     <div className="space-y-12 pb-16">
@@ -107,14 +124,24 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
               />
             </div>
 
-            {/* Primary CTA Button: Brand Gradient Pill */}
-            <button
-              onClick={() => onWatchAnime(anime.id, 1)}
-              className="w-full flex items-center justify-center gap-2.5 py-3.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white font-bold text-sm rounded-full shadow-[0_0_25px_rgba(168,85,247,0.4)] transition-all active:scale-95"
-            >
-              <Play className="w-4 h-4 fill-current ml-0.5" />
-              Watch Episode 1
-            </button>
+            {/* Primary CTA Button: Watch Latest / Watch Episode 1 or Upcoming */}
+            {schedule.latestReleasedEpisode > 0 ? (
+              <button
+                onClick={() => onWatchAnime(anime.id, latestEpToWatch)}
+                className="w-full flex items-center justify-center gap-2.5 py-3.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white font-bold text-sm rounded-full shadow-[0_0_25px_rgba(168,85,247,0.4)] transition-all active:scale-95"
+              >
+                <Play className="w-4 h-4 fill-current ml-0.5" />
+                Watch Episode {latestEpToWatch}
+              </button>
+            ) : (
+              <button
+                disabled
+                className="w-full flex items-center justify-center gap-2 py-3 bg-[#161321] border border-[#2a243a] text-amber-400 font-bold text-xs rounded-full cursor-not-allowed opacity-80"
+              >
+                <Lock className="w-4 h-4" />
+                Upcoming — Not Released
+              </button>
+            )}
 
             {/* Watch Status Selector */}
             <div className="space-y-1.5">
@@ -168,12 +195,10 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
                 <span className="text-purple-300 font-semibold">{anime.format || 'TV'}</span>
                 <span aria-hidden="true">·</span>
                 <span>{anime.seasonYear || anime.season || 'N/A'}</span>
-                {anime.episodes && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span>{anime.episodes} Episodes</span>
-                  </>
-                )}
+                <span aria-hidden="true">·</span>
+                <span className="text-emerald-400 font-mono font-bold">
+                  {schedule.latestReleasedEpisode} / {schedule.totalEpisodes || '?'} Released
+                </span>
                 {studioName && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -205,7 +230,7 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
               </p>
             </div>
 
-            {/* Genre Pills (Rounded-Full, Bordered) */}
+            {/* Genre Pills */}
             {anime.genres && anime.genres.length > 0 && (
               <div className="space-y-2">
                 <h3 className="text-xs font-extrabold text-[#a1a1aa] uppercase tracking-wider font-display">Genres</h3>
@@ -221,6 +246,43 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
                 </div>
               </div>
             )}
+
+            {/* Progressive Episode Releases Section */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between border-b border-[#2a243a] pb-2">
+                <h3 className="text-xs font-extrabold text-white uppercase tracking-wider font-display">
+                  Episode Release List ({schedule.latestReleasedEpisode} Available)
+                </h3>
+                <span className="text-[11px] text-purple-300 font-mono">
+                  {anime.status === 'RELEASING' ? 'Progressive Release Mode Active' : 'All Episodes Released'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                {schedule.episodes.slice(0, 24).map((ep) => {
+                  const isReleased = ep.status === 'released' && ep.hasStreamSource;
+                  return (
+                    <button
+                      key={ep.episodeNumber}
+                      disabled={!isReleased}
+                      onClick={() => onWatchAnime(anime.id, ep.episodeNumber)}
+                      className={`p-2.5 rounded-xl text-xs font-mono font-bold border transition-all text-left flex items-center justify-between ${
+                        isReleased
+                          ? 'bg-[#161321] hover:bg-purple-900/30 text-white border-purple-500/40 hover:border-purple-500 shadow cursor-pointer'
+                          : 'bg-[#0d0b14]/60 text-zinc-500 border-[#2a243a]/30 cursor-not-allowed'
+                      }`}
+                    >
+                      <span>Ep {ep.episodeNumber}</span>
+                      {isReleased ? (
+                        <Play className="w-3 h-3 text-purple-400 fill-purple-400" />
+                      ) : (
+                        <Lock className="w-3 h-3 text-zinc-600" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {/* YouTube Trailer Embed */}
             {anime.trailer && anime.trailer.site === 'youtube' && (

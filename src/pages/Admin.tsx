@@ -36,6 +36,9 @@ import {
   User as UserIcon,
   Sparkles,
   Filter,
+  Tv,
+  Clock,
+  Film,
 } from 'lucide-react';
 import {
   PROVIDERS,
@@ -48,6 +51,13 @@ import { useUser } from '../contexts/UserContext';
 import { UserAccount, UserRole, UserStatus } from '../types/anime';
 import { getUserInitials } from '../utils/userAvatar';
 import { DashboardStats } from '../components/admin/DashboardStats';
+import {
+  calculateAnimeEpisodeSchedule,
+  saveEpisodeOverride,
+  removeEpisodeOverride,
+  saveEpisodeTitleOverride,
+} from '../services/episodeService';
+import { getAnimeById } from '../services/anilist';
 
 interface AdminProps {
   onNavigate?: (route: string) => void;
@@ -86,7 +96,30 @@ export const Admin: React.FC<AdminProps> = ({ onNavigate }) => {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Dashboard Tabs
-  const [activeTab, setActiveTab] = useState<'monitor' | 'users' | 'streaming' | 'storage' | 'logs'>('monitor');
+  const [activeTab, setActiveTab] = useState<'monitor' | 'users' | 'episodes' | 'streaming' | 'storage' | 'logs'>('monitor');
+
+  // Episodes Admin State
+  const [episodeSearchAnimeId, setEpisodeSearchAnimeId] = useState<number>(16498);
+  const [episodesAnimeData, setEpisodesAnimeData] = useState<any>(null);
+  const [episodesLoading, setEpisodesLoading] = useState<boolean>(false);
+
+  const loadEpisodesAdminData = async (id: number) => {
+    setEpisodesLoading(true);
+    try {
+      const data = await getAnimeById(id);
+      setEpisodesAnimeData(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setEpisodesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'episodes' && !episodesAnimeData) {
+      loadEpisodesAdminData(16498);
+    }
+  }, [activeTab]);
 
   // Monitor Telemetry
   const [healthData, setHealthData] = useState<any>(null);
@@ -660,6 +693,7 @@ export const Admin: React.FC<AdminProps> = ({ onNavigate }) => {
         {[
           { id: 'monitor', label: 'Site Monitor & Telemetry', icon: Activity },
           { id: 'users', label: 'User Accounts & Identity', icon: Users, count: userAccounts.length },
+          { id: 'episodes', label: 'Episodes & Airing Releases', icon: Tv },
           { id: 'streaming', label: 'Streaming Engines & Simulator', icon: Radio },
           { id: 'storage', label: 'Client Data & Storage Quota', icon: Database },
           { id: 'logs', label: 'Live Query & Network Stream', icon: Server },
@@ -1588,6 +1622,199 @@ export const Admin: React.FC<AdminProps> = ({ onNavigate }) => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* TAB: EPISODES & PROGRESSIVE AIRING RELEASE MANAGEMENT        */}
+      {/* ------------------------------------------------------------- */}
+      {activeTab === 'episodes' && (
+        <div className="space-y-6 font-sans">
+          <div className="bg-[#161321] rounded-2xl border border-[#2a243a] p-6 space-y-5 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2a243a] pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Tv className="w-4 h-4 text-purple-400" />
+                  <h3 className="font-display font-bold text-white text-base">
+                    Progressive Episode Release & Airing Schedule Controls
+                  </h3>
+                </div>
+                <p className="text-xs text-[#a1a1aa] mt-0.5">
+                  Inspect progressive availability, release verification status, or apply administrator manual overrides.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  placeholder="AniList Anime ID..."
+                  value={episodeSearchAnimeId}
+                  onChange={(e) => setEpisodeSearchAnimeId(parseInt(e.target.value, 10) || 1)}
+                  className="bg-[#0d0b14] border border-[#2a243a] rounded-xl px-3 py-1.5 text-xs text-white font-mono outline-none"
+                />
+                <button
+                  onClick={() => loadEpisodesAdminData(episodeSearchAnimeId)}
+                  disabled={episodesLoading}
+                  className="px-4 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 disabled:opacity-50 text-white text-xs font-bold rounded-full shadow transition-all"
+                >
+                  {episodesLoading ? 'Loading...' : 'Inspect Anime'}
+                </button>
+              </div>
+            </div>
+
+            {/* Popular quick select anime */}
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-purple-300">
+              <span className="text-[#a1a1aa]">Quick Inspect:</span>
+              <button onClick={() => { setEpisodeSearchAnimeId(16498); loadEpisodesAdminData(16498); }} className="hover:underline">Solo Leveling (16498)</button>
+              <span>·</span>
+              <button onClick={() => { setEpisodeSearchAnimeId(154587); loadEpisodesAdminData(154587); }} className="hover:underline">Frieren (154587)</button>
+              <span>·</span>
+              <button onClick={() => { setEpisodeSearchAnimeId(113415); loadEpisodesAdminData(113415); }} className="hover:underline">Jujutsu Kaisen S2 (113415)</button>
+            </div>
+
+            {/* Anime Schedule Overview & Overrides Table */}
+            {episodesAnimeData ? (() => {
+              const epSchedule = calculateAnimeEpisodeSchedule(episodesAnimeData);
+              const animeTitle = episodesAnimeData.title.english || episodesAnimeData.title.romaji;
+
+              return (
+                <div className="space-y-4 pt-2">
+                  <div className="p-4 bg-[#0d0b14] rounded-xl border border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <img
+                        src={episodesAnimeData.coverImage.large}
+                        alt={animeTitle}
+                        className="w-12 h-16 object-cover rounded-lg border border-[#2a243a]"
+                      />
+                      <div>
+                        <h4 className="font-display font-bold text-white text-sm">{animeTitle}</h4>
+                        <div className="flex items-center gap-2 text-xs text-[#a1a1aa] font-mono mt-0.5">
+                          <span>Status: <strong className="text-purple-300">{episodesAnimeData.status}</strong></span>
+                          <span>·</span>
+                          <span>Format: {episodesAnimeData.format || 'TV'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 text-xs font-mono">
+                      <div className="text-right">
+                        <span className="text-[#a1a1aa] block text-[10px]">LATEST RELEASED</span>
+                        <span className="text-emerald-400 font-bold text-sm">Episode {epSchedule.latestReleasedEpisode}</span>
+                      </div>
+                      <div className="text-right border-l border-[#2a243a] pl-3">
+                        <span className="text-[#a1a1aa] block text-[10px]">TOTAL SCHEDULED</span>
+                        <span className="text-white font-bold text-sm">{epSchedule.totalEpisodes || '?'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Episodes Status Table */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-[#2a243a] text-[#a1a1aa] font-display uppercase tracking-wider text-[10px]">
+                          <th className="py-2.5 px-3">Episode</th>
+                          <th className="py-2.5 px-3">Release Status</th>
+                          <th className="py-2.5 px-3">Streaming Source</th>
+                          <th className="py-2.5 px-3">Scheduled Airing Time</th>
+                          <th className="py-2.5 px-3 text-right">Admin Override</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#2a243a]/50 font-sans">
+                        {epSchedule.episodes.map((ep) => (
+                          <tr key={ep.episodeNumber} className="hover:bg-white/[0.02] transition-colors">
+                            <td className="py-2.5 px-3 font-mono font-bold text-white">
+                              Episode {ep.episodeNumber}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase ${
+                                  ep.status === 'released'
+                                    ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-500/30'
+                                    : ep.status === 'airing'
+                                    ? 'bg-purple-950/40 text-purple-300 border border-purple-500/30'
+                                    : ep.status === 'delayed'
+                                    ? 'bg-amber-950/40 text-amber-300 border border-amber-500/30'
+                                    : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                                }`}
+                              >
+                                {ep.status}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono">
+                              {ep.hasStreamSource ? (
+                                <span className="text-emerald-400 flex items-center gap-1 text-[11px]">
+                                  <CheckCircle2 className="w-3.5 h-3.5" /> Playable
+                                </span>
+                              ) : (
+                                <span className="text-zinc-500 flex items-center gap-1 text-[11px]">
+                                  <Lock className="w-3.5 h-3.5" /> Unavailable
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[#a1a1aa] text-[11px]">
+                              {ep.releaseDateFormatted || 'Standard Schedule'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    saveEpisodeOverride(episodesAnimeData.id, ep.episodeNumber, 'released', true, 'Admin forced release');
+                                    loadEpisodesAdminData(episodesAnimeData.id);
+                                    showNotice(`Override set: Ep ${ep.episodeNumber} marked Released`);
+                                  }}
+                                  className="px-2 py-1 bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-500/30 text-emerald-300 rounded text-[10px] font-bold"
+                                >
+                                  Force Released
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    saveEpisodeOverride(episodesAnimeData.id, ep.episodeNumber, 'delayed', false, 'Admin flagged delayed');
+                                    loadEpisodesAdminData(episodesAnimeData.id);
+                                    showNotice(`Override set: Ep ${ep.episodeNumber} marked Delayed`);
+                                  }}
+                                  className="px-2 py-1 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-500/30 text-amber-300 rounded text-[10px] font-bold"
+                                >
+                                  Flag Delayed
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const customTitle = prompt(`Enter official title for Episode ${ep.episodeNumber}:`, ep.officialTitle || '');
+                                    if (customTitle !== null) {
+                                      saveEpisodeTitleOverride(episodesAnimeData.id, ep.episodeNumber, customTitle);
+                                      loadEpisodesAdminData(episodesAnimeData.id);
+                                      showNotice(`Saved official title for Episode ${ep.episodeNumber}`);
+                                    }
+                                  }}
+                                  className="px-2 py-1 bg-purple-950/40 hover:bg-purple-900/60 border border-purple-500/30 text-purple-300 rounded text-[10px] font-bold"
+                                >
+                                  Edit Title
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    removeEpisodeOverride(episodesAnimeData.id, ep.episodeNumber);
+                                    loadEpisodesAdminData(episodesAnimeData.id);
+                                    showNotice(`Reset override for Ep ${ep.episodeNumber}`);
+                                  }}
+                                  className="px-2 py-1 bg-[#0d0b14] hover:bg-zinc-800 border border-[#2a243a] text-zinc-400 rounded text-[10px]"
+                                >
+                                  Reset
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })() : (
+              <div className="p-8 text-center text-[#a1a1aa] text-xs">
+                Click "Inspect Anime" above or select a quick inspect title to load progressive episode schedule data.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
