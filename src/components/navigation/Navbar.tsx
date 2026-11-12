@@ -27,6 +27,8 @@ export interface NavbarProps {
   currentRoute: string;
   onNavigate: (route: string) => void;
   onOpenSearch: () => void;
+  onSelectAnime?: (id: number) => void;
+  onWatchAnime?: (id: number, episode?: number) => void;
 }
 
 export const NAV_ITEMS = [
@@ -41,7 +43,13 @@ export const NAV_ITEMS = [
   { id: 'history', label: 'History', icon: History },
 ];
 
-export const Navbar: React.FC<NavbarProps> = ({ currentRoute, onNavigate, onOpenSearch }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  currentRoute,
+  onNavigate,
+  onOpenSearch,
+  onSelectAnime,
+  onWatchAnime,
+}) => {
   const {
     notifications,
     unreadNotificationCount,
@@ -367,7 +375,11 @@ export const Navbar: React.FC<NavbarProps> = ({ currentRoute, onNavigate, onOpen
         onClose={() => setShowNotificationModal(false)}
         onWatchAnime={(id, ep) => {
           setShowNotificationModal(false);
-          // navigate or handle watch
+          onWatchAnime?.(id, ep);
+        }}
+        onSelectAnime={(id) => {
+          setShowNotificationModal(false);
+          onSelectAnime?.(id);
         }}
       />
     </>

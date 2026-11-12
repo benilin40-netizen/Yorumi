@@ -1,5 +1,6 @@
 import { Anime } from '../types/anime';
 import { aniListManager } from './anilistManager';
+import { FALLBACK_ANIME_CATALOG } from './animeService';
 
 const MEDIA_FIELDS = `
   id
@@ -92,11 +93,6 @@ const MEDIA_FIELDS_FULL = `
   }
 `;
 
-
-
-// ... fields definitions ...
-// (Retain MEDIA_FIELDS and MEDIA_FIELDS_FULL)
-
 async function fetchGraphQL<T>(query: string, variables: Record<string, any> = {}): Promise<T> {
   return aniListManager.request<T>(query, variables);
 }
@@ -117,11 +113,19 @@ export async function getTrendingAnime(page = 1, perPage = 12): Promise<{ media:
       }
     }
   `;
-  const data = await fetchGraphQL<any>(query, { page, perPage });
-  return {
-    media: data.Page.media,
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, { page, perPage });
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList getTrendingAnime error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
 
 export async function getPopularAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
@@ -140,11 +144,19 @@ export async function getPopularAnime(page = 1, perPage = 12): Promise<{ media: 
       }
     }
   `;
-  const data = await fetchGraphQL<any>(query, { page, perPage });
-  return {
-    media: data.Page.media,
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, { page, perPage });
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList getPopularAnime error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
 
 export async function getTopRatedAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
@@ -163,11 +175,19 @@ export async function getTopRatedAnime(page = 1, perPage = 12): Promise<{ media:
       }
     }
   `;
-  const data = await fetchGraphQL<any>(query, { page, perPage });
-  return {
-    media: data.Page.media,
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, { page, perPage });
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList getTopRatedAnime error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
 
 export async function getSeasonalAnime(season?: string, year?: number, page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
@@ -175,7 +195,7 @@ export async function getSeasonalAnime(season?: string, year?: number, page = 1,
   const currentYear = year || now.getFullYear();
   let currentSeason = season;
   if (!currentSeason) {
-    const month = now.getMonth() + 1; // 1-12
+    const month = now.getMonth() + 1;
     if (month >= 1 && month <= 3) currentSeason = 'WINTER';
     else if (month >= 4 && month <= 6) currentSeason = 'SPRING';
     else if (month >= 7 && month <= 9) currentSeason = 'SUMMER';
@@ -197,11 +217,19 @@ export async function getSeasonalAnime(season?: string, year?: number, page = 1,
       }
     }
   `;
-  const data = await fetchGraphQL<any>(query, { season: currentSeason, seasonYear: currentYear, page, perPage });
-  return {
-    media: data.Page.media,
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, { season: currentSeason, seasonYear: currentYear, page, perPage });
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList getSeasonalAnime error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
 
 export async function getUpcomingAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
@@ -220,11 +248,19 @@ export async function getUpcomingAnime(page = 1, perPage = 12): Promise<{ media:
       }
     }
   `;
-  const data = await fetchGraphQL<any>(query, { page, perPage });
-  return {
-    media: data.Page.media,
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, { page, perPage });
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList getUpcomingAnime error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
 
 export async function getAnimeMovies(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
@@ -243,11 +279,19 @@ export async function getAnimeMovies(page = 1, perPage = 12): Promise<{ media: A
       }
     }
   `;
-  const data = await fetchGraphQL<any>(query, { page, perPage });
-  return {
-    media: data.Page.media,
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, { page, perPage });
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList getAnimeMovies error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
 
 export async function getAnimeById(id: number): Promise<Anime | null> {
@@ -260,10 +304,10 @@ export async function getAnimeById(id: number): Promise<Anime | null> {
   `;
   try {
     const data = await fetchGraphQL<any>(query, { id });
-    return data.Media || null;
+    return data?.Media || FALLBACK_ANIME_CATALOG.find((a) => a.id === id) || FALLBACK_ANIME_CATALOG[0];
   } catch (err) {
-    console.error(`Error fetching anime by ID ${id}:`, err);
-    return null;
+    console.error(`Error fetching anime by ID ${id}, using fallback:`, err);
+    return FALLBACK_ANIME_CATALOG.find((a) => a.id === id) || FALLBACK_ANIME_CATALOG[0];
   }
 }
 
@@ -285,7 +329,7 @@ export async function getAiringSchedule(airingAtGreater: number, airingAtLesser:
   `;
   try {
     const data = await aniListManager.request<any>(query, { airingAtGreater, airingAtLesser, page, perPage }, 900000);
-    return data.Page.airingSchedules || [];
+    return data?.Page?.airingSchedules || [];
   } catch (err) {
     console.error('Error fetching airing schedule:', err);
     return [];
@@ -368,11 +412,17 @@ export async function searchAnime(filters: DiscoverFilters = {}): Promise<{ medi
     }
   `;
 
-  const data = await fetchGraphQL<any>(query, variables);
-  return {
-    media: data.Page.media || [],
-    pageInfo: data.Page.pageInfo,
-  };
+  try {
+    const data = await fetchGraphQL<any>(query, variables);
+    return {
+      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
+      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  } catch (err) {
+    console.warn('AniList searchAnime error, using fallback catalog:', err);
+    return {
+      media: FALLBACK_ANIME_CATALOG,
+      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
+    };
+  }
 }
-
-

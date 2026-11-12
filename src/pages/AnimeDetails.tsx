@@ -10,6 +10,8 @@ import {
   Calendar,
   Clock,
   CheckCircle2,
+  BellRing,
+  BellOff,
 } from 'lucide-react';
 import { Anime, WatchStatus } from '../types/anime';
 import { getAnimeById } from '../services/anilist';
@@ -22,6 +24,7 @@ import {
   syncEpisodeReleasesAndNotify,
   AnimeEpisodeSchedule,
 } from '../services/episodeService';
+import { isFavoriteAlertEnabled, toggleFavoriteAlert } from '../services/notificationService';
 
 interface AnimeDetailsProps {
   animeId: number;
@@ -40,7 +43,10 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
   const [loading, setLoading] = useState(true);
   const { updateWatchlist, getWatchlistItem, toggleFavorite, isFavorite } = useUser();
 
+  const [alertsActive, setAlertsActive] = useState<boolean>(() => isFavoriteAlertEnabled(animeId));
+
   useEffect(() => {
+    setAlertsActive(isFavoriteAlertEnabled(animeId));
     async function load() {
       setLoading(true);
       const data = await getAnimeById(animeId);
@@ -165,7 +171,12 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
 
             {/* Favorite Action Button */}
             <button
-              onClick={() => toggleFavorite(anime)}
+              onClick={() => {
+                const isNowFav = toggleFavorite(anime);
+                if (isNowFav) {
+                  setAlertsActive(isFavoriteAlertEnabled(anime.id));
+                }
+              }}
               className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-full glass-panel border border-[#2a243a] text-xs font-semibold transition-all ${
                 favorited ? 'text-rose-400 border-rose-500/30' : 'text-[#a1a1aa] hover:text-white'
               }`}
@@ -173,6 +184,34 @@ export const AnimeDetails: React.FC<AnimeDetailsProps> = ({
               <Heart className={`w-4 h-4 ${favorited ? 'fill-current' : ''}`} />
               {favorited ? 'In Favorites' : 'Add to Favorites'}
             </button>
+
+            {/* Favorite Release Alerts Opt-in Toggle */}
+            {favorited && (
+              <button
+                onClick={() => {
+                  toggleFavoriteAlert(anime.id);
+                  setAlertsActive(!alertsActive);
+                }}
+                className={`w-full flex items-center justify-center gap-2 py-2 rounded-full text-xs font-semibold transition-all ${
+                  alertsActive
+                    ? 'bg-purple-950/40 text-purple-300 border border-purple-500/40 hover:bg-purple-900/50'
+                    : 'bg-[#161321] text-zinc-400 border border-[#2a243a] hover:text-white'
+                }`}
+                title={alertsActive ? 'Mute release alerts for this show' : 'Enable release alerts for this show'}
+              >
+                {alertsActive ? (
+                  <>
+                    <BellRing className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Release Alerts: ON</span>
+                  </>
+                ) : (
+                  <>
+                    <BellOff className="w-3.5 h-3.5" />
+                    <span>Release Alerts: Muted</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Details Column */}

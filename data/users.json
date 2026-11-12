@@ -1,0 +1,60 @@
+[
+  {
+    "id": "usr_1794448837741_envn",
+    "uid": "usr_1794448837741_olb2",
+    "username": "testuser",
+    "displayName": "Test User",
+    "email": "testuser@gmail.com",
+    "role": "member",
+    "status": "active",
+    "accountStatus": "active",
+    "bio": "Yorumi anime viewer and collector",
+    "createdAt": 1794448837741,
+    "updatedAt": 1794448837741,
+    "lastLoginAt": 1794448846690,
+    "watchlistCount": 0,
+    "passwordHash": "password123"
+  },
+  {
+    "id": "user-admin-master",
+    "uid": "user-admin-master",
+    "username": "benilin40",
+    "displayName": "benilin40",
+    "email": "benilin40@gmail.com",
+    "role": "admin",
+    "status": "active",
+    "accountStatus": "active",
+    "bio": "Platform Master Administrator",
+    "createdAt": 1794354320814,
+    "lastLoginAt": 1794449391591,
+    "passwordHash": "benilin"
+  },
+  {
+    "id": "user-admin-alt",
+    "uid": "user-admin-alt",
+    "username": "benilin",
+    "displayName": "benilin",
+    "email": "benilin40@gmail.com",
+    "role": "admin",
+    "status": "active",
+    "accountStatus": "active",
+    "bio": "Platform Administrator",
+    "createdAt": 1794354820815,
+    "lastLoginAt": 1794355320815,
+    "passwordHash": "benilin"
+  },
+  {
+    "id": "user-admin-76",
+    "uid": "user-admin-76",
+    "username": "benilin76",
+    "displayName": "benilin76",
+    "email": "benilin76@gmail.com",
+    "role": "admin",
+    "status": "active",
+    "accountStatus": "active",
+    "bio": "Platform Administrator",
+    "createdAt": 1794354920815,
+    "lastLoginAt": 1794449391613,
+    "passwordHash": "benilin"
+  }
+]

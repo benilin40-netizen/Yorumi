@@ -1,5 +1,5 @@
 import { Anime, EpisodeStatus } from '../types/anime';
-import { getNotifications, addNotification, getSubscribedAnimeIds } from './notificationService';
+import { getNotifications, addNotification, getSubscribedAnimeIds, isFavoriteAlertEnabled } from './notificationService';
 
 export interface EpisodeInfo {
   episodeNumber: number;
@@ -327,13 +327,17 @@ export function syncEpisodeReleasesAndNotify(anime: Anime): void {
         notifiedSet.push(key);
         const title = anime.title.english || anime.title.romaji;
         const epTitle = ep.officialTitle ? `: ${ep.officialTitle}` : '';
+        const isFav = isFavoriteAlertEnabled(anime.id);
+
         addNotification({
-          title: `New Episode Released: ${title}`,
-          message: `Episode ${ep.episodeNumber}${epTitle} is now available to stream on Yorumi!`,
-          type: 'aired',
+          title: isFav ? `⭐ New Episode: ${title}` : `New Episode Released: ${title}`,
+          message: isFav
+            ? `Episode ${ep.episodeNumber}${epTitle} of your favorited show is now ready to stream on Yorumi!`
+            : `Episode ${ep.episodeNumber}${epTitle} is now available to stream on Yorumi!`,
+          type: isFav ? 'favorite_release' : 'aired',
           animeId: anime.id,
           animeTitle: title,
-          coverImage: anime.coverImage.large,
+          coverImage: anime.coverImage.large || anime.coverImage.extraLarge,
           episodeNumber: ep.episodeNumber,
         });
       }

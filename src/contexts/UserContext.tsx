@@ -119,6 +119,32 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setFirebaseUser({ uid: current.id, email: current.email, emailVerified: true });
     }
     setIsFirebaseLoading(false);
+
+    // Sync server users in the background
+    fetch('/api/auth/users')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.success && Array.isArray(data.users)) {
+          const localAccounts = getUserAccounts();
+          let changed = false;
+          data.users.forEach((u: UserAccount) => {
+            const idx = localAccounts.findIndex(
+              (la) => la.id === u.id || la.email.toLowerCase() === u.email.toLowerCase()
+            );
+            if (idx >= 0) {
+              localAccounts[idx] = { ...localAccounts[idx], ...u };
+              changed = true;
+            } else {
+              localAccounts.push(u);
+              changed = true;
+            }
+          });
+          if (changed) {
+            setUserAccounts([...localAccounts]);
+          }
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const loginManual = async (identifier: string, password: string): Promise<UserAccount> => {
@@ -176,7 +202,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUserState(GUEST_USER);
     setFirebaseUser(null);
     setAuthRecoveryUser(null);
-    localStorage.removeItem('yorumi_current_user_id');
+    setStorageCurrentUser('guest');
   };
 
   const updateWatchlist = (anime: Anime, status: WatchStatus, score: number | null = null, episode: number = 1) => {
@@ -237,7 +263,7 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUserAccounts(getUserAccounts());
     if (currentUser.id === id) {
       setCurrentUserState(GUEST_USER);
-      localStorage.removeItem('yorumi_current_user_id');
+      setStorageCurrentUser('guest');
     }
   };
 

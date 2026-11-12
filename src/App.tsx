@@ -202,6 +202,8 @@ export function AppContent() {
         currentRoute={currentRoute}
         onNavigate={handleNavigate}
         onOpenSearch={() => setSearchOpen(true)}
+        onSelectAnime={handleSelectAnime}
+        onWatchAnime={handleWatchAnime}
       />
 
       {/* Main Page View */}

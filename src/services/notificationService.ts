@@ -1,8 +1,8 @@
 import { Anime } from '../types/anime';
 import { aniListManager } from './anilistManager';
-import { getWatchlist } from './storage';
+import { getWatchlist, getFavorites } from './storage';
 
-export type NotificationCategory = 'all' | 'airing' | 'aired' | 'new_anime' | 'seasons' | 'announcements' | 'account' | 'system';
+export type NotificationCategory = 'all' | 'airing' | 'aired' | 'new_anime' | 'seasons' | 'announcements' | 'account' | 'system' | 'favorite_release';
 
 export interface NotificationPreference {
   airingReminders: boolean;
@@ -11,6 +11,8 @@ export interface NotificationPreference {
   seasonAlerts: boolean;
   announcements: boolean;
   accountAlerts: boolean;
+  favoriteReleaseAlerts: boolean; // Opt-in to receive alerts for new episode releases for favorited shows
+  mutedFavoriteIds: number[];     // Individual anime IDs muted by the user
   reminderIntervalMinutes: number; // 15, 30, 60
   pushEnabled: boolean;
   timezone: string;
@@ -43,6 +45,8 @@ const DEFAULT_PREFS: NotificationPreference = {
   seasonAlerts: true,
   announcements: true,
   accountAlerts: true,
+  favoriteReleaseAlerts: true,
+  mutedFavoriteIds: [],
   reminderIntervalMinutes: 30,
   pushEnabled: false,
   timezone: 'Africa/Kampala',
@@ -123,16 +127,98 @@ export function clearReadNotifications(): YorumiNotification[] {
   return updated;
 }
 
+export function isFavoriteAlertEnabled(animeId: number): boolean {
+  const prefs = getNotificationPreferences();
+  if (!prefs.favoriteReleaseAlerts) return false;
+  return !prefs.mutedFavoriteIds?.includes(animeId);
+}
+
+export function toggleFavoriteAlert(animeId: number): boolean {
+  const prefs = getNotificationPreferences();
+  const muted = prefs.mutedFavoriteIds || [];
+  const isMuted = muted.includes(animeId);
+  let updatedMuted: number[];
+
+  if (isMuted) {
+    updatedMuted = muted.filter((id) => id !== animeId);
+  } else {
+    updatedMuted = [...muted, animeId];
+  }
+
+  saveNotificationPreferences({
+    ...prefs,
+    favoriteReleaseAlerts: true, // ensure master opt-in stays true when toggling
+    mutedFavoriteIds: updatedMuted,
+  });
+
+  return isMuted; // returns true if now enabled
+}
+
+export function enableAllFavoritesAlerts(animeIds: number[]): void {
+  const prefs = getNotificationPreferences();
+  const muted = prefs.mutedFavoriteIds || [];
+  const updatedMuted = muted.filter((id) => !animeIds.includes(id));
+  saveNotificationPreferences({
+    ...prefs,
+    favoriteReleaseAlerts: true,
+    mutedFavoriteIds: updatedMuted,
+  });
+}
+
+export function muteAllFavoritesAlerts(animeIds: number[]): void {
+  const prefs = getNotificationPreferences();
+  const muted = new Set(prefs.mutedFavoriteIds || []);
+  animeIds.forEach((id) => muted.add(id));
+  saveNotificationPreferences({
+    ...prefs,
+    mutedFavoriteIds: Array.from(muted),
+  });
+}
+
+export function testFavoriteReleaseAlert(anime: Anime, episodeNum: number = 1): YorumiNotification {
+  const title = anime.title.english || anime.title.romaji;
+  return addNotification({
+    title: `⭐ New Episode: ${title}`,
+    message: `Episode ${episodeNum} is now available! As requested for your favorited shows, you're getting this live alert.`,
+    type: 'favorite_release',
+    animeId: anime.id,
+    animeTitle: title,
+    coverImage: anime.coverImage.large || anime.coverImage.extraLarge,
+    episodeNumber: episodeNum,
+  });
+}
+
 export function getSubscribedAnimeIds(): number[] {
+  const subscribedSet = new Set<number>();
+
+  // 1. Explicitly subscribed IDs
   try {
     const raw = localStorage.getItem(SUBSCRIBED_ANIME_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed: number[] = JSON.parse(raw);
+      parsed.forEach((id) => subscribedSet.add(id));
+    }
   } catch {}
 
+  // 2. Watchlist IDs
   const watchlist = getWatchlist();
-  const ids = watchlist.map((w) => w.anime.id);
-  localStorage.setItem(SUBSCRIBED_ANIME_KEY, JSON.stringify(ids));
-  return ids;
+  watchlist.forEach((w) => subscribedSet.add(w.anime.id));
+
+  // 3. Favorited Anime IDs (if favoriteReleaseAlerts is opted in)
+  const prefs = getNotificationPreferences();
+  if (prefs.favoriteReleaseAlerts) {
+    const favorites = getFavorites();
+    const mutedSet = new Set(prefs.mutedFavoriteIds || []);
+    favorites.forEach((fav) => {
+      if (!mutedSet.has(fav.id)) {
+        subscribedSet.add(fav.id);
+      }
+    });
+  }
+
+  const result = Array.from(subscribedSet);
+  localStorage.setItem(SUBSCRIBED_ANIME_KEY, JSON.stringify(result));
+  return result;
 }
 
 export function toggleAnimeSubscription(animeId: number): boolean {
