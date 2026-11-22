@@ -14,15 +14,30 @@ export const Seasonal: React.FC<PageProps> = ({ onSelectAnime, onWatchAnime }) =
   const [loading, setLoading] = useState(true);
   const [selectedSeason, setSelectedSeason] = useState<string>('WINTER');
   const [year] = useState<number>(new Date().getFullYear());
+  const [page, setPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(true);
+  const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      const res = await getSeasonalAnime(selectedSeason, year, 1, 24);
+  const loadSeason = async (targetSeason: string, targetPage: number) => {
+    setLoading(true);
+    setErrorNotice(null);
+    try {
+      const res = await getSeasonalAnime(targetSeason, year, targetPage, 24);
       setAnimeList(res.media);
+      setHasNextPage(res.pageInfo.hasNextPage);
+      setPage(targetPage);
+      if (res.isFallback) {
+        setErrorNotice('Showing cached seasonal lineup while reconnecting to AniList gateway.');
+      }
+    } catch (err: any) {
+      setErrorNotice(err.message || 'Failed to load seasonal anime');
+    } finally {
       setLoading(false);
     }
-    load();
+  };
+
+  useEffect(() => {
+    loadSeason(selectedSeason, 1);
   }, [selectedSeason, year]);
 
   return (
@@ -54,7 +69,33 @@ export const Seasonal: React.FC<PageProps> = ({ onSelectAnime, onWatchAnime }) =
         </div>
       </div>
 
+      {errorNotice && (
+        <div className="p-3 bg-purple-950/40 border border-purple-500/30 rounded-xl text-xs text-purple-300">
+          ℹ {errorNotice}
+        </div>
+      )}
+
       <AnimeGrid animeList={animeList} onSelectAnime={onSelectAnime} onWatchAnime={onWatchAnime} loading={loading} />
+
+      {!loading && animeList.length > 0 && (
+        <div className="flex items-center justify-center gap-4 pt-4">
+          <button
+            disabled={page <= 1}
+            onClick={() => loadSeason(selectedSeason, page - 1)}
+            className="px-5 py-2 glass-panel border border-[#2a243a] disabled:opacity-40 text-xs font-bold text-[#fafafa] rounded-full hover:border-purple-500/40"
+          >
+            Previous Page
+          </button>
+          <span className="text-xs font-mono text-[#a1a1aa]">Page {page}</span>
+          <button
+            disabled={!hasNextPage}
+            onClick={() => loadSeason(selectedSeason, page + 1)}
+            className="px-5 py-2 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 disabled:opacity-40 text-xs font-bold text-white rounded-full shadow"
+          >
+            Next Page
+          </button>
+        </div>
+      )}
     </div>
   );
 };

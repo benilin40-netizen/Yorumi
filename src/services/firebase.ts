@@ -1,39 +1,34 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore, doc, getDoc, getDocFromServer, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged,
+  User as FirebaseUser,
+} from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  getDocFromServer,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  collection,
+  getDocs,
+  onSnapshot,
+  query,
+  limit,
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import {
-  UserAccount,
-  WatchlistItem,
-  Anime,
-  WatchHistoryItem,
-} from '../types/anime';
-import {
-  getWatchlist,
-  saveWatchlistItem,
-  removeFromWatchlist as removeStorageWatchlist,
-  getFavorites,
-  toggleFavorite as toggleStorageFavorite,
-  getWatchHistory,
-  recordWatchHistory,
-  getUserAccounts,
-  createUserAccount,
-  updateUserAccount,
-  deleteUserAccount,
-  registerLocalAccount,
-  loginLocalAccount,
-  checkLocalUsername,
-} from './storage';
+import { UserAccount, WatchlistItem, Anime, WatchHistoryItem, UserRole } from '../types/anime';
 
-// -------------------------------------------------------------
-// REAL FIREBASE INITIALIZATION & FIRESTORE BINDING
-// -------------------------------------------------------------
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+// Initialize Firebase App & Services
+const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
-
-export const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
-export const BOOTSTRAPPED_ADMIN_EMAIL = 'benilin40@gmail.com';
+export const googleProvider = new GoogleAuthProvider();
 
 export enum OperationType {
   CREATE = 'create',
@@ -53,6 +48,11 @@ export interface FirestoreErrorInfo {
     email?: string | null;
     emailVerified?: boolean | null;
     isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
   };
 }
 
@@ -60,10 +60,15 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid || null,
-      email: auth.currentUser?.email || null,
-      emailVerified: auth.currentUser?.emailVerified || null,
-      isAnonymous: auth.currentUser?.isAnonymous || null,
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || [],
     },
     operationType,
     path,
@@ -72,200 +77,258 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+// Bootstrapped Connection Prober
 export async function testFirebaseConnection(): Promise<boolean> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
     return true;
   } catch (error) {
-    console.warn('Firestore connectivity check:', error);
-    return true; // Fallback smoothly to local mode if offline
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firebase client appears to be offline. Verify network or database status.');
+    }
+    return false;
   }
 }
 
-export class RegistrationProfileError extends Error {
-  code = 'auth-succeeded-profile-failed';
-  user: any;
-  userId: string;
-  pendingProfile: UserAccount;
-
-  constructor(message: string, user: any, pendingProfile: UserAccount) {
-    super(message);
-    this.name = 'RegistrationProfileError';
-    this.user = user;
-    this.userId = pendingProfile.id;
-    this.pendingProfile = pendingProfile;
-  }
-}
-
-export async function checkUsernameAvailable(username: string): Promise<{ available: boolean; message: string }> {
-  return checkLocalUsername(username);
-}
-
-export async function sendVerificationEmail(): Promise<void> {
-  return Promise.resolve();
-}
-
-export async function registerWithEmailPassword(data: {
-  email: string;
-  password: string;
-  username: string;
-  displayName: string;
-  bio?: string;
-}): Promise<UserAccount> {
-  const account = await registerLocalAccount(data);
-
-  // Sync profile document to Firestore users collection
+// Authentication Helpers
+export async function signInWithGoogle(): Promise<FirebaseUser> {
   try {
-    const userRef = doc(db, 'users', account.id);
-    await setDoc(userRef, {
-      id: account.id,
-      uid: account.id,
-      username: account.username,
-      displayName: account.displayName,
-      email: account.email,
-      role: account.role,
-      status: account.status,
-      accountStatus: account.status,
-      bio: account.bio || '',
-      watchlistCount: 0,
-      createdAt: account.createdAt,
-      updatedAt: account.createdAt,
-      lastLoginAt: account.createdAt,
-    });
-  } catch (err) {
-    console.warn('Firestore user profile sync warning (proceeding with local user):', err);
+    const result = await signInWithPopup(auth, googleProvider);
+    return result.user;
+  } catch (error) {
+    console.error('Google Sign-In failed:', error);
+    throw error;
   }
-
-  return account;
-}
-
-export async function createOrRetryUserProfile(
-  fbUser: any,
-  overrides?: { username?: string; displayName?: string; bio?: string }
-): Promise<UserAccount> {
-  const accounts = getUserAccounts();
-  const found = accounts.find((a) => a.email.toLowerCase() === (fbUser.email || '').toLowerCase());
-  if (found) return found;
-
-  return registerLocalAccount({
-    email: fbUser.email || 'user@yorumi.app',
-    password: 'password123',
-    username: overrides?.username || fbUser.email?.split('@')[0] || 'yorumi_user',
-    displayName: overrides?.displayName || fbUser.displayName || 'Yorumi Member',
-    bio: overrides?.bio,
-  });
-}
-
-export async function syncUserProfile(firebaseUser: any): Promise<UserAccount> {
-  return createOrRetryUserProfile(firebaseUser);
-}
-
-export async function sendPasswordReset(email: string): Promise<void> {
-  const cleanEmail = email.trim().toLowerCase();
-  if (!cleanEmail || !cleanEmail.includes('@')) {
-    throw new Error('Please enter a valid email address.');
-  }
-  return Promise.resolve();
-}
-
-export async function loginWithEmailOrUsername(identifier: string, password: string): Promise<UserAccount> {
-  const account = await loginLocalAccount(identifier, password);
-  return account;
 }
 
 export async function logoutFirebaseUser(): Promise<void> {
-  return Promise.resolve();
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error('Sign out error:', error);
+    throw error;
+  }
 }
 
+// User Profile Synchronization in Firestore
+export async function syncUserProfile(firebaseUser: FirebaseUser): Promise<UserAccount> {
+  const userRef = doc(db, 'users', firebaseUser.uid);
+  const path = `users/${firebaseUser.uid}`;
+
+  try {
+    const snap = await getDoc(userRef);
+
+    if (snap.exists()) {
+      return snap.data() as UserAccount;
+    }
+
+    // Auto-create profile for new authenticated user
+    const username = (
+      firebaseUser.email?.split('@')[0] ||
+      firebaseUser.displayName?.toLowerCase().replace(/[^a-z0-9_]/g, '') ||
+      `user_${firebaseUser.uid.substring(0, 6)}`
+    ).replace(/[^a-z0-9_]/g, '_');
+
+    const newProfile: UserAccount = {
+      id: firebaseUser.uid,
+      username,
+      displayName: firebaseUser.displayName || 'Anime Fan',
+      email: firebaseUser.email || '',
+      role: 'member' as UserRole,
+      status: 'active',
+      avatarUrl: firebaseUser.photoURL || '',
+      bio: 'YORUMI anime viewer and collector',
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+      watchlistCount: 0,
+    };
+
+    await setDoc(userRef, newProfile);
+    return newProfile;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+// Fetch all registered users for Admin panel
 export async function fetchAllUsers(): Promise<UserAccount[]> {
-  return getUserAccounts();
+  const path = 'users';
+  try {
+    const q = query(collection(db, path), limit(100));
+    const snap = await getDocs(q);
+    const users: UserAccount[] = [];
+    snap.forEach((docSnap) => {
+      users.push(docSnap.data() as UserAccount);
+    });
+    return users;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }
 
+// Create user directly from Admin console into Firestore
 export async function createFirestoreUserAccount(
   data: Omit<UserAccount, 'id' | 'createdAt'>
 ): Promise<UserAccount> {
-  const account = createUserAccount(data);
+  const generatedId = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const userRef = doc(db, 'users', generatedId);
+  const path = `users/${generatedId}`;
+
+  const newAccount: UserAccount = {
+    ...data,
+    id: generatedId,
+    createdAt: Date.now(),
+    watchlistCount: data.watchlistCount || 0,
+  };
+
   try {
-    const userRef = doc(db, 'users', account.id);
-    await setDoc(userRef, {
-      id: account.id,
-      uid: account.id,
-      username: account.username,
-      displayName: account.displayName,
-      email: account.email,
-      role: account.role,
-      status: account.status,
-      bio: account.bio || '',
-      createdAt: account.createdAt,
-    });
-  } catch (err) {
-    console.warn('Firestore user creation warning:', err);
+    await setDoc(userRef, newAccount);
+    if (data.role === 'admin') {
+      try {
+        await setDoc(doc(db, 'admins', generatedId), {
+          userId: generatedId,
+          email: data.email,
+          role: 'admin',
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('Admin record creation warning:', err);
+      }
+    }
+    return newAccount;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
   }
-  return account;
 }
 
+// Update user in Firestore
 export async function updateFirestoreUserAccount(
   userId: string,
   updates: Partial<UserAccount>
 ): Promise<void> {
-  updateUserAccount(userId, updates);
+  const userRef = doc(db, 'users', userId);
+  const path = `users/${userId}`;
   try {
-    const userRef = doc(db, 'users', userId);
-    await updateDoc(userRef, { ...updates, updatedAt: Date.now() });
-  } catch (err) {
-    console.warn('Firestore user update warning:', err);
+    await updateDoc(userRef, updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
+// Delete user in Firestore
 export async function deleteFirestoreUserAccount(userId: string): Promise<void> {
-  deleteUserAccount(userId);
+  const userRef = doc(db, 'users', userId);
+  const path = `users/${userId}`;
   try {
-    const userRef = doc(db, 'users', userId);
     await deleteDoc(userRef);
-  } catch (err) {
-    console.warn('Firestore user delete warning:', err);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
-// Watchlist, Favorites, History wrappers
+// Watchlist Firestore Persistence
 export async function saveWatchlistItemToFirestore(userId: string, item: WatchlistItem): Promise<void> {
-  saveWatchlistItem(item.anime, item.status, item.userScore, item.lastWatchedEpisode);
+  const path = `users/${userId}/watchlist/${item.anime.id}`;
+  try {
+    await setDoc(doc(db, 'users', userId, 'watchlist', String(item.anime.id)), {
+      animeId: item.anime.id,
+      status: item.status,
+      userScore: item.userScore,
+      lastWatchedEpisode: item.lastWatchedEpisode,
+      updatedAt: item.updatedAt,
+      anime: item.anime,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 }
 
 export async function removeWatchlistItemFromFirestore(userId: string, animeId: number): Promise<void> {
-  removeStorageWatchlist(animeId);
+  const path = `users/${userId}/watchlist/${animeId}`;
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'watchlist', String(animeId)));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
 }
 
 export async function loadWatchlistFromFirestore(userId: string): Promise<WatchlistItem[]> {
-  return getWatchlist();
+  const path = `users/${userId}/watchlist`;
+  try {
+    const snap = await getDocs(collection(db, 'users', userId, 'watchlist'));
+    const items: WatchlistItem[] = [];
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      items.push({
+        anime: data.anime,
+        status: data.status,
+        userScore: data.userScore ?? null,
+        lastWatchedEpisode: data.lastWatchedEpisode || 1,
+        updatedAt: data.updatedAt || Date.now(),
+      });
+    });
+    return items;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }
 
+// Favorites Firestore Persistence
 export async function saveFavoriteToFirestore(userId: string, anime: Anime): Promise<void> {
-  toggleStorageFavorite(anime);
+  const path = `users/${userId}/favorites/${anime.id}`;
+  try {
+    await setDoc(doc(db, 'users', userId, 'favorites', String(anime.id)), {
+      animeId: anime.id,
+      anime,
+      createdAt: Date.now(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 }
 
 export async function removeFavoriteFromFirestore(userId: string, animeId: number): Promise<void> {
-  toggleStorageFavorite({ id: animeId } as any);
+  const path = `users/${userId}/favorites/${animeId}`;
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'favorites', String(animeId)));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
 }
 
 export async function loadFavoritesFromFirestore(userId: string): Promise<Anime[]> {
-  return getFavorites();
+  const path = `users/${userId}/favorites`;
+  try {
+    const snap = await getDocs(collection(db, 'users', userId, 'favorites'));
+    const list: Anime[] = [];
+    snap.forEach((d) => {
+      const data = d.data();
+      if (data.anime) list.push(data.anime);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }
 
+// Watch History Firestore Persistence
 export async function saveHistoryToFirestore(userId: string, item: WatchHistoryItem): Promise<void> {
-  recordWatchHistory({
-    anime: {
-      id: item.animeId,
-      title: { english: item.animeTitle, romaji: item.animeTitle, native: null },
-      coverImage: { extraLarge: item.coverImage, large: item.coverImage, medium: item.coverImage, color: null },
-      bannerImage: item.bannerImage,
-    } as any,
-    episode: item.episode,
-    progressSeconds: item.progressSeconds,
-    totalDurationSeconds: item.totalDurationSeconds,
-  });
+  const path = `users/${userId}/history/${item.animeId}`;
+  try {
+    await setDoc(doc(db, 'users', userId, 'history', String(item.animeId)), item);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 }
 
 export async function loadHistoryFromFirestore(userId: string): Promise<WatchHistoryItem[]> {
-  return getWatchHistory();
+  const path = `users/${userId}/history`;
+  try {
+    const snap = await getDocs(collection(db, 'users', userId, 'history'));
+    const list: WatchHistoryItem[] = [];
+    snap.forEach((d) => list.push(d.data() as WatchHistoryItem));
+    return list.sort((a, b) => b.timestamp - a.timestamp);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }

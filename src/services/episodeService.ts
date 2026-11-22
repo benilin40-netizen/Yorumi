@@ -1,5 +1,10 @@
 import { Anime, EpisodeStatus } from '../types/anime';
-import { getNotifications, addNotification, getSubscribedAnimeIds, isFavoriteAlertEnabled } from './notificationService';
+import {
+  addNotification,
+  getSubscribedAnimeIds,
+  isFavoriteAlertEnabled,
+} from './notificationService';
+import { safeFetchJson } from '../utils/apiClient';
 
 export interface EpisodeInfo {
   episodeNumber: number;
@@ -28,12 +33,21 @@ export interface AnimeEpisodeSchedule {
   lastSyncedAt: number;
 }
 
-const EPISODE_OVERRIDES_KEY = 'yorumi_episode_overrides_v2';
-const EPISODE_TITLES_KEY = 'yorumi_official_ep_titles_v2';
-const EPISODE_NOTIFIED_KEY = 'yorumi_notified_episodes_v2';
+export interface EpisodeOverrideRecord {
+  status: EpisodeStatus;
+  hasStreamSource: boolean;
+  note?: string;
+  titleOverride?: string;
+  updatedAt?: number;
+}
 
-export function getEpisodeOverrides(): Record<string, { status: EpisodeStatus; hasStreamSource: boolean; note?: string }> {
+const EPISODE_OVERRIDES_KEY = 'yorumi_episode_overrides_v3';
+const EPISODE_TITLES_KEY = 'yorumi_official_ep_titles_v3';
+const EPISODE_NOTIFIED_KEY = 'yorumi_notified_episodes_v3';
+
+export function getEpisodeOverrides(): Record<string, EpisodeOverrideRecord> {
   try {
+    if (typeof localStorage === 'undefined') return {};
     const raw = localStorage.getItem(EPISODE_OVERRIDES_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch {
@@ -41,29 +55,52 @@ export function getEpisodeOverrides(): Record<string, { status: EpisodeStatus; h
   }
 }
 
-export function saveEpisodeOverride(
+function writeLocalOverrides(overrides: Record<string, EpisodeOverrideRecord>) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(EPISODE_OVERRIDES_KEY, JSON.stringify(overrides));
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export async function loadEpisodeOverridesFromFirestore(): Promise<Record<string, EpisodeOverrideRecord>> {
+  return getEpisodeOverrides();
+}
+
+export async function saveEpisodeOverride(
   animeId: number,
   episodeNumber: number,
   status: EpisodeStatus,
   hasStreamSource: boolean,
   note?: string
-) {
+): Promise<void> {
   const overrides = getEpisodeOverrides();
   const key = `${animeId}_${episodeNumber}`;
-  overrides[key] = { status, hasStreamSource, note };
-  localStorage.setItem(EPISODE_OVERRIDES_KEY, JSON.stringify(overrides));
+  const titleOverride = getEpisodeTitleOverrides()[key];
+  const record: EpisodeOverrideRecord = {
+    status,
+    hasStreamSource,
+    note,
+    ...(titleOverride ? { titleOverride } : {}),
+    updatedAt: Date.now(),
+  };
+
+  overrides[key] = record;
+  writeLocalOverrides(overrides);
 }
 
-export function removeEpisodeOverride(animeId: number, episodeNumber: number) {
+export async function removeEpisodeOverride(animeId: number, episodeNumber: number): Promise<void> {
   const overrides = getEpisodeOverrides();
   const key = `${animeId}_${episodeNumber}`;
   delete overrides[key];
-  localStorage.setItem(EPISODE_OVERRIDES_KEY, JSON.stringify(overrides));
+  writeLocalOverrides(overrides);
 }
 
-// Custom Title Overrides
 export function getEpisodeTitleOverrides(): Record<string, string> {
   try {
+    if (typeof localStorage === 'undefined') return {};
     const raw = localStorage.getItem(EPISODE_TITLES_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch {
@@ -75,13 +112,13 @@ export function saveEpisodeTitleOverride(animeId: number, episodeNumber: number,
   const titles = getEpisodeTitleOverrides();
   const key = `${animeId}_${episodeNumber}`;
   titles[key] = customTitle.trim();
-  localStorage.setItem(EPISODE_TITLES_KEY, JSON.stringify(titles));
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(EPISODE_TITLES_KEY, JSON.stringify(titles));
+  }
 }
 
-// Fetch official titles from Jikan API with local caching and safe response parsing
-import { safeFetchJson } from '../utils/apiClient';
-
 const jikanTitleCache = new Map<number, Record<number, { title: string; synopsis?: string }>>();
+const jikanTitleInFlight = new Map<number, Promise<Record<number, { title: string; synopsis?: string }>>>();
 
 export async function fetchOfficialEpisodeTitles(
   animeId: number,
@@ -93,94 +130,117 @@ export async function fetchOfficialEpisodeTitles(
 
   if (!malId) return {};
 
-  try {
-    // Attempt 1: Backend proxy route
-    let result = await safeFetchJson<{ data?: any[] }>(`/api/jikan/anime/${malId}/episodes`, { timeoutMs: 6000 });
+  const existing = jikanTitleInFlight.get(animeId);
+  if (existing) return existing;
 
-    // Attempt 2: Direct Jikan API fallback if proxy didn't succeed
-    if (!result.ok || !result.data?.data) {
-      result = await safeFetchJson<{ data?: any[] }>(`https://api.jikan.moe/v4/anime/${malId}/episodes`, { timeoutMs: 6000 });
-    }
+  const task = (async () => {
+    try {
+      const result = await safeFetchJson<{ data?: any[] }>(`/api/jikan/anime/${malId}/episodes`, { timeoutMs: 6000 });
 
-    if (!result.ok || !result.data || !Array.isArray(result.data.data)) {
-      return {};
-    }
-
-    const dataList = result.data.data;
-    const map: Record<number, { title: string; synopsis?: string }> = {};
-
-    dataList.forEach((ep: any) => {
-      const epNum = ep.mal_id || ep.episode;
-      const t = ep.title || ep.title_romanji || ep.title_japanese;
-      if (epNum && t) {
-        map[epNum] = {
-          title: t,
-          synopsis: ep.synopsis || undefined,
-        };
+      if (!result.ok || !result.data || !Array.isArray(result.data.data)) {
+        return {};
       }
-    });
 
-    jikanTitleCache.set(animeId, map);
-    return map;
-  } catch (err) {
-    console.warn(`Could not fetch Jikan episode titles for MAL ID ${malId}:`, err);
-    return {};
-  }
+      const map: Record<number, { title: string; synopsis?: string }> = {};
+      result.data.data.forEach((ep: any) => {
+        const epNum = ep.mal_id || ep.episode;
+        const t = ep.title || ep.title_romanji || ep.title_japanese;
+        if (epNum && t) {
+          map[epNum] = {
+            title: t,
+            synopsis: ep.synopsis || undefined,
+          };
+        }
+      });
+
+      jikanTitleCache.set(animeId, map);
+      return map;
+    } catch (err) {
+      console.warn(`Could not fetch Jikan episode titles for MAL ID ${malId}:`, err);
+      return {};
+    } finally {
+      jikanTitleInFlight.delete(animeId);
+    }
+  })();
+
+  jikanTitleInFlight.set(animeId, task);
+  return task;
 }
 
-/**
- * Calculates progressive episode availability for an anime.
- * Core Rule: Airing anime episodes become available ONE AT A TIME as officially released.
- */
 export function calculateAnimeEpisodeSchedule(anime: Anime): AnimeEpisodeSchedule {
   const overrides = getEpisodeOverrides();
   const titleOverrides = getEpisodeTitleOverrides();
+  const jikanTitles = jikanTitleCache.get(anime.id) || {};
   const nowSec = Math.floor(Date.now() / 1000);
-  const totalEps = anime.episodes || (anime.status === 'FINISHED' ? 12 : 24);
+
   const animeStatus = anime.status || 'FINISHED';
+  const knownTotalEpisodes = typeof anime.episodes === 'number' && anime.episodes > 0 ? anime.episodes : null;
+  const jikanEpisodeNums = Object.keys(jikanTitles).map((k) => parseInt(k, 10)).filter((n) => !Number.isNaN(n));
+  const maxJikanEp = jikanEpisodeNums.length > 0 ? Math.max(...jikanEpisodeNums) : 0;
 
-  let highestReleasedEp = 0;
-
-  if (animeStatus === 'FINISHED') {
-    highestReleasedEp = totalEps;
-  } else if (animeStatus === 'NOT_YET_RELEASED') {
-    highestReleasedEp = 0;
-  } else if (anime.nextAiringEpisode) {
-    const nextEp = anime.nextAiringEpisode.episode;
-    const nextAirAt = anime.nextAiringEpisode.airingAt;
-
-    if (nowSec >= nextAirAt) {
-      highestReleasedEp = nextEp;
-    } else {
-      highestReleasedEp = Math.max(0, nextEp - 1);
+  let maxOverrideEp = 0;
+  const prefix = `${anime.id}_`;
+  Object.keys(overrides).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      const epNum = parseInt(key.slice(prefix.length), 10);
+      if (!Number.isNaN(epNum) && epNum > maxOverrideEp) {
+        maxOverrideEp = epNum;
+      }
     }
+  });
+
+  let highestConfirmedReleasedEp = 0;
+
+  if (animeStatus === 'NOT_YET_RELEASED') {
+    highestConfirmedReleasedEp = 0;
+  } else if (animeStatus === 'FINISHED') {
+    highestConfirmedReleasedEp = knownTotalEpisodes || maxJikanEp || 0;
+  } else if (anime.nextAiringEpisode && anime.nextAiringEpisode.episode >= 1) {
+    const nextEp = anime.nextAiringEpisode.episode;
+    highestConfirmedReleasedEp = Math.max(0, nextEp - 1);
+  } else if (maxJikanEp > 0) {
+    highestConfirmedReleasedEp = maxJikanEp;
   } else {
-    highestReleasedEp = totalEps > 0 ? Math.min(totalEps, 12) : 12;
+    highestConfirmedReleasedEp = 0;
   }
 
-  const jikanTitles = jikanTitleCache.get(anime.id) || {};
+  for (let i = highestConfirmedReleasedEp + 1; i <= maxOverrideEp; i++) {
+    const ov = overrides[`${anime.id}_${i}`];
+    if (ov && (ov.status === 'released' || ov.status === 'airing') && ov.hasStreamSource) {
+      highestConfirmedReleasedEp = i;
+    }
+  }
+
+  const nextEpNumber = anime.nextAiringEpisode?.episode || 0;
+  const displayCeiling = knownTotalEpisodes
+    ? Math.max(knownTotalEpisodes, highestConfirmedReleasedEp, nextEpNumber, maxOverrideEp)
+    : Math.max(highestConfirmedReleasedEp, nextEpNumber, maxJikanEp, maxOverrideEp);
+
   const episodesList: EpisodeInfo[] = [];
 
-  for (let epNum = 1; epNum <= totalEps; epNum++) {
+  for (let epNum = 1; epNum <= displayCeiling; epNum++) {
     const overrideKey = `${anime.id}_${epNum}`;
     const override = overrides[overrideKey];
-    const titleOverride = titleOverrides[overrideKey];
+    const titleOverride = titleOverrides[overrideKey] || override?.titleOverride;
 
     let epStatus: EpisodeStatus = 'upcoming';
     let hasStream = false;
     let airingAtTs: number | undefined = undefined;
 
+    if (anime.nextAiringEpisode && epNum === anime.nextAiringEpisode.episode) {
+      airingAtTs = anime.nextAiringEpisode.airingAt;
+    }
+
     if (override) {
       epStatus = override.status;
       hasStream = override.hasStreamSource;
-    } else if (epNum <= highestReleasedEp) {
+    } else if (epNum <= highestConfirmedReleasedEp) {
       epStatus = 'released';
       hasStream = true;
     } else if (anime.nextAiringEpisode && epNum === anime.nextAiringEpisode.episode) {
-      airingAtTs = anime.nextAiringEpisode.airingAt;
-      if (nowSec >= anime.nextAiringEpisode.airingAt) {
+      if (nowSec >= anime.nextAiringEpisode.airingAt && nowSec <= anime.nextAiringEpisode.airingAt + 3600 * 6) {
         epStatus = 'airing';
-        hasStream = true;
+        hasStream = false;
       } else {
         epStatus = 'upcoming';
         hasStream = false;
@@ -194,7 +254,7 @@ export function calculateAnimeEpisodeSchedule(anime: Anime): AnimeEpisodeSchedul
     if (epStatus === 'upcoming') {
       statusLabel = 'Upcoming';
     } else if (epStatus === 'airing') {
-      statusLabel = 'Airing Now';
+      statusLabel = 'Airing';
     } else if (epStatus === 'delayed') {
       statusLabel = 'Delayed';
     } else if (epStatus === 'unavailable') {
@@ -211,7 +271,7 @@ export function calculateAnimeEpisodeSchedule(anime: Anime): AnimeEpisodeSchedul
 
     const officialInfo = jikanTitles[epNum];
     const formattedEpNum = epNum < 10 ? `0${epNum}` : `${epNum}`;
-    let finalTitle = titleOverride || (officialInfo ? `Episode ${epNum} — ${officialInfo.title}` : `Episode ${formattedEpNum}`);
+    const finalTitle = titleOverride || (officialInfo ? `Episode ${epNum} — ${officialInfo.title}` : `Episode ${formattedEpNum}`);
 
     episodesList.push({
       episodeNumber: epNum,
@@ -223,24 +283,21 @@ export function calculateAnimeEpisodeSchedule(anime: Anime): AnimeEpisodeSchedul
       statusLabel,
       releaseDateFormatted,
       synopsis: officialInfo?.synopsis,
-      thumbnail: anime.coverImage.extraLarge || anime.coverImage.large,
+      thumbnail: anime.coverImage?.extraLarge || anime.coverImage?.large || '',
     });
   }
 
   return {
     animeId: anime.id,
-    totalEpisodes: totalEps,
+    totalEpisodes: knownTotalEpisodes,
     status: animeStatus,
-    latestReleasedEpisode: highestReleasedEp,
+    latestReleasedEpisode: highestConfirmedReleasedEp,
     episodes: episodesList,
     nextAiringEpisode: anime.nextAiringEpisode,
     lastSyncedAt: Date.now(),
   };
 }
 
-/**
- * Validates if an episode can be watched.
- */
 export function isEpisodePlayable(anime: Anime, episodeNumber: number): {
   playable: boolean;
   reason?: string;
@@ -253,7 +310,7 @@ export function isEpisodePlayable(anime: Anime, episodeNumber: number): {
   if (!targetEp) {
     return {
       playable: false,
-      reason: `Episode ${episodeNumber} does not exist for this anime.`,
+      reason: `Episode ${episodeNumber} is not released or confirmed yet for this anime.`,
       status: 'upcoming',
       highestReleasedEp: schedule.latestReleasedEpisode,
     };
@@ -262,8 +319,17 @@ export function isEpisodePlayable(anime: Anime, episodeNumber: number): {
   if (targetEp.status === 'upcoming') {
     return {
       playable: false,
-      reason: `Episode ${episodeNumber} has not been officially released yet.`,
+      reason: `Episode ${episodeNumber} is scheduled (${targetEp.releaseDateFormatted || 'date TBA'}) and has not been officially released yet.`,
       status: 'upcoming',
+      highestReleasedEp: schedule.latestReleasedEpisode,
+    };
+  }
+
+  if (targetEp.status === 'airing' && !targetEp.hasStreamSource) {
+    return {
+      playable: false,
+      reason: `Episode ${episodeNumber} is currently airing and awaiting verified stream confirmation.`,
+      status: 'airing',
       highestReleasedEp: schedule.latestReleasedEpisode,
     };
   }
@@ -280,7 +346,7 @@ export function isEpisodePlayable(anime: Anime, episodeNumber: number): {
   if (targetEp.status === 'unavailable' || !targetEp.hasStreamSource) {
     return {
       playable: false,
-      reason: `Episode ${episodeNumber} is released, but streaming source is currently unavailable.`,
+      reason: `Episode ${episodeNumber} is released, but the streaming source is currently unavailable.`,
       status: 'unavailable',
       highestReleasedEp: schedule.latestReleasedEpisode,
     };
@@ -293,10 +359,6 @@ export function isEpisodePlayable(anime: Anime, episodeNumber: number): {
   };
 }
 
-/**
- * Retrieves next playable episode for Auto-Play Next.
- * Never attempts to play an upcoming or unreleased episode.
- */
 export function getNextPlayableEpisode(anime: Anime, currentEpisode: number): EpisodeInfo | null {
   const schedule = calculateAnimeEpisodeSchedule(anime);
   const nextEpNum = currentEpisode + 1;
@@ -308,41 +370,44 @@ export function getNextPlayableEpisode(anime: Anime, currentEpisode: number): Ep
   return null;
 }
 
-/**
- * Checks for new episode releases and sends user notifications.
- */
 export function syncEpisodeReleasesAndNotify(anime: Anime): void {
   const schedule = calculateAnimeEpisodeSchedule(anime);
   const subscribedIds = getSubscribedAnimeIds();
 
-  if (!subscribedIds.includes(anime.id)) return;
+  if (!subscribedIds.includes(anime.id) || typeof localStorage === 'undefined') return;
 
   const rawNotified = localStorage.getItem(EPISODE_NOTIFIED_KEY);
   const notifiedSet: string[] = rawNotified ? JSON.parse(rawNotified) : [];
 
+  let changed = false;
   schedule.episodes.forEach((ep) => {
     if (ep.status === 'released' && ep.hasStreamSource) {
       const key = `${anime.id}_ep_${ep.episodeNumber}`;
       if (!notifiedSet.includes(key)) {
         notifiedSet.push(key);
+        changed = true;
         const title = anime.title.english || anime.title.romaji;
         const epTitle = ep.officialTitle ? `: ${ep.officialTitle}` : '';
         const isFav = isFavoriteAlertEnabled(anime.id);
 
         addNotification({
-          title: isFav ? `⭐ New Episode: ${title}` : `New Episode Released: ${title}`,
+          id: `rel_${anime.id}_${ep.episodeNumber}`,
+          title: isFav ? `New Favorite Episode: ${title}` : `New Episode Released: ${title}`,
           message: isFav
-            ? `Episode ${ep.episodeNumber}${epTitle} of your favorited show is now ready to stream on Yorumi!`
-            : `Episode ${ep.episodeNumber}${epTitle} is now available to stream on Yorumi!`,
+            ? `Episode ${ep.episodeNumber}${epTitle} of your favorited show is now ready to stream on Yorumi.`
+            : `Episode ${ep.episodeNumber}${epTitle} is now available to stream on Yorumi.`,
           type: isFav ? 'favorite_release' : 'aired',
           animeId: anime.id,
           animeTitle: title,
           coverImage: anime.coverImage.large || anime.coverImage.extraLarge,
           episodeNumber: ep.episodeNumber,
+          actionUrl: `/watch/${anime.id}/${ep.episodeNumber}`,
         });
       }
     }
   });
 
-  localStorage.setItem(EPISODE_NOTIFIED_KEY, JSON.stringify(notifiedSet));
+  if (changed) {
+    localStorage.setItem(EPISODE_NOTIFIED_KEY, JSON.stringify(notifiedSet.slice(-500)));
+  }
 }

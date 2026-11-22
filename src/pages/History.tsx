@@ -76,7 +76,19 @@ export const History: React.FC<HistoryProps> = ({ onSelectAnime, onWatchAnime })
                   </div>
 
                   <div className="w-full h-1.5 bg-[#0d0b14] rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-purple-500 to-blue-500 w-3/4" />
+                    {(() => {
+                      const pct = item.totalDurationSeconds && item.totalDurationSeconds > 0
+                        ? Math.min(100, Math.max(5, Math.round((item.progressSeconds / item.totalDurationSeconds) * 100)))
+                        : item.progressSeconds && item.progressSeconds > 0
+                        ? 35
+                        : 15;
+                      return (
+                        <div
+                          className="h-full bg-gradient-to-r from-purple-500 to-blue-500 transition-all duration-300"
+                          style={{ width: `${pct}%` }}
+                        />
+                      );
+                    })()}
                   </div>
 
                   <div className="pt-1">

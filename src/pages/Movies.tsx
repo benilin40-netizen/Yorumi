@@ -16,7 +16,7 @@ export const Movies: React.FC<PageProps> = ({ onSelectAnime, onWatchAnime }) => 
   useEffect(() => {
     async function load() {
       setLoading(true);
-      const res = await getAnimeMovies(1, 24);
+      const res = await getAnimeMovies(1, 24, false);
       setAnimeList(res.media);
       setLoading(false);
     }
@@ -29,9 +29,11 @@ export const Movies: React.FC<PageProps> = ({ onSelectAnime, onWatchAnime }) => 
         <Film className="w-8 h-8 text-purple-400" />
         <div>
           <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-            Feature <span className="brand-gradient-text">Anime Movies</span>
+            Anime <span className="brand-gradient-text">Movies</span>
           </h1>
-          <p className="text-sm text-[#a1a1aa] font-sans">Full length theatrical films, specials, and cinematic achievements</p>
+          <p className="text-sm text-[#a1a1aa] font-sans">
+            Sorted newest first by release date — unreleased titles are marked Coming soon
+          </p>
         </div>
       </div>
 

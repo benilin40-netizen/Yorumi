@@ -12,6 +12,9 @@ import {
   BellOff,
   Sparkles,
   ExternalLink,
+  RefreshCw,
+  Clock,
+  Globe,
 } from 'lucide-react';
 import {
   YorumiNotification,
@@ -27,9 +30,10 @@ import {
   enableAllFavoritesAlerts,
   muteAllFavoritesAlerts,
   testFavoriteReleaseAlert,
+  syncNotificationsAndPrefsFromFirestore,
+  checkAiringScheduleAndNotify,
 } from '../../services/notificationService';
-import { getFavorites } from '../../services/storage';
-import { Anime } from '../../types/anime';
+import { useUser } from '../../contexts/UserContext';
 
 interface NotificationCenterModalProps {
   isOpen: boolean;
@@ -38,43 +42,68 @@ interface NotificationCenterModalProps {
   onSelectAnime?: (animeId: number) => void;
 }
 
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Tokyo',
+  'Asia/Seoul',
+  'Asia/Singapore',
+  'Africa/Kampala',
+  'Australia/Sydney',
+];
+
 export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = ({
   isOpen,
   onClose,
   onWatchAnime,
   onSelectAnime,
 }) => {
+  const { currentUser, favorites, refreshNotifications } = useUser();
   const [notifications, setNotifications] = useState<YorumiNotification[]>([]);
   const [prefs, setPrefs] = useState<NotificationPreference>(getNotificationPreferences());
-  const [favorites, setFavorites] = useState<Anime[]>([]);
   const [activeTab, setActiveTab] = useState<'all' | 'favorites' | 'airing' | 'aired' | 'new_anime' | 'seasons' | 'announcements' | 'account' | 'prefs'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [testAlertToast, setTestAlertToast] = useState<string | null>(null);
+  const [checkingLive, setCheckingLive] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
-      setNotifications(getNotifications());
-      setPrefs(getNotificationPreferences());
-      setFavorites(getFavorites());
+    if (!isOpen) return;
+    setNotifications(getNotifications());
+    setPrefs(getNotificationPreferences());
+
+    if (currentUser?.id && currentUser.id !== 'guest') {
+      syncNotificationsAndPrefsFromFirestore(currentUser.id).then((res) => {
+        setNotifications(res.notifications);
+        setPrefs(res.preferences);
+        refreshNotifications();
+      });
     }
-  }, [isOpen]);
+  }, [isOpen, currentUser?.id, refreshNotifications]);
 
   if (!isOpen) return null;
 
   const handleMarkAllRead = () => {
     const updated = markAllNotificationsRead();
     setNotifications([...updated]);
+    refreshNotifications();
   };
 
   const handleDelete = (id: string) => {
     const updated = deleteNotification(id);
     setNotifications([...updated]);
+    refreshNotifications();
   };
 
   const handleClearRead = () => {
     const updated = clearReadNotifications();
     setNotifications([...updated]);
+    refreshNotifications();
   };
 
   const handleSavePrefs = (newPrefs: NotificationPreference) => {
@@ -100,6 +129,23 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
     setPrefs(getNotificationPreferences());
   };
 
+  const handleCheckLiveReleases = async () => {
+    setCheckingLive(true);
+    try {
+      const added = await checkAiringScheduleAndNotify();
+      setNotifications(getNotifications());
+      refreshNotifications();
+      setTestAlertToast(
+        added > 0
+          ? `Found ${added} new airing/release alert${added > 1 ? 's' : ''} for your followed anime.`
+          : 'Checked live schedules — no new episode alerts due right now.'
+      );
+      setTimeout(() => setTestAlertToast(null), 3500);
+    } finally {
+      setCheckingLive(false);
+    }
+  };
+
   const handleTriggerTestAlert = () => {
     if (favorites.length === 0) {
       setTestAlertToast('Please add an anime to your Favorites first!');
@@ -109,6 +155,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
     const sampleAnime = favorites[0];
     const newNotif = testFavoriteReleaseAlert(sampleAnime, 1);
     setNotifications([newNotif, ...getNotifications()]);
+    refreshNotifications();
     setTestAlertToast(`Simulated release alert sent for "${sampleAnime.title.english || sampleAnime.title.romaji}"!`);
     setTimeout(() => setTestAlertToast(null), 3500);
   };
@@ -229,7 +276,15 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 
             {/* Quick Actions */}
             {activeTab !== 'prefs' && activeTab !== 'favorites' && (
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={handleCheckLiveReleases}
+                  disabled={checkingLive}
+                  className="px-3 py-1.5 bg-purple-600/20 hover:bg-purple-600/30 text-purple-200 border border-purple-500/30 text-xs rounded-xl flex items-center gap-1.5 transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-purple-300 ${checkingLive ? 'animate-spin' : ''}`} />
+                  Check Alerts
+                </button>
                 <button
                   onClick={handleMarkAllRead}
                   className="px-3 py-1.5 bg-[#161321] hover:bg-[#201c2e] text-[#a1a1aa] hover:text-white border border-[#2a243a] text-xs rounded-xl flex items-center gap-1.5 transition-all"
@@ -565,6 +620,47 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                     className="w-4 h-4 accent-purple-600 rounded"
                   />
                 </label>
+
+                <div className="p-3 bg-[#0d0b14] rounded-2xl border border-[#2a243a] grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-white flex items-center gap-1.5 mb-1.5">
+                      <Clock className="w-3.5 h-3.5 text-purple-400" />
+                      Reminder Lead Time
+                    </label>
+                    <select
+                      value={prefs.reminderIntervalMinutes || 30}
+                      onChange={(e) =>
+                        handleSavePrefs({ ...prefs, reminderIntervalMinutes: parseInt(e.target.value, 10) })
+                      }
+                      className="w-full bg-[#161321] border border-[#2a243a] rounded-xl px-3 py-2 text-xs text-white outline-none"
+                    >
+                      <option value={15}>15 minutes before</option>
+                      <option value={30}>30 minutes before</option>
+                      <option value={60}>60 minutes before</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-white flex items-center gap-1.5 mb-1.5">
+                      <Globe className="w-3.5 h-3.5 text-purple-400" />
+                      Schedule Timezone
+                    </label>
+                    <select
+                      value={prefs.timezone || 'UTC'}
+                      onChange={(e) => handleSavePrefs({ ...prefs, timezone: e.target.value })}
+                      className="w-full bg-[#161321] border border-[#2a243a] rounded-xl px-3 py-2 text-xs text-white outline-none"
+                    >
+                      {!COMMON_TIMEZONES.includes(prefs.timezone) && (
+                        <option value={prefs.timezone}>{prefs.timezone}</option>
+                      )}
+                      {COMMON_TIMEZONES.map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
           ) : filteredNotifications.length === 0 ? (

@@ -69,6 +69,20 @@
   box-shadow: 0 0 20px rgba(168, 85, 247, 0.25);
 }
 
+/* Slow Ken Burns Hero Zoom */
+@keyframes kenBurnsSlow {
+  0% {
+    transform: scale(1.02) translate3d(0, 0, 0);
+  }
+  100% {
+    transform: scale(1.12) translate3d(-1.5%, -1%, 0);
+  }
+}
+
+.ken-burns {
+  animation: kenBurnsSlow 14s ease-out forwards;
+}
+
 /* Floating Particles for Hero */
 @keyframes floatParticle {
   0% {
@@ -100,4 +114,14 @@
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ken-burns,
+  .particle {
+    animation: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
 }

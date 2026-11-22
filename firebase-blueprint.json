@@ -13,6 +13,8 @@
         "status": { "type": "string", "enum": ["active", "suspended", "pending"] },
         "avatarUrl": { "type": "string", "maxLength": 500 },
         "bio": { "type": "string", "maxLength": 500 },
+        "preferredProvider": { "type": "string", "enum": ["yenime", "aniembed", "kuroko"] },
+        "providerMode": { "type": "string", "enum": ["auto", "manual"] },
         "watchlistCount": { "type": "number" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }

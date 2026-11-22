@@ -158,17 +158,23 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onWatchAnime(anime.id, 1);
-                        onClose();
-                      }}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white text-xs font-bold rounded-full shadow transition-all"
-                    >
-                      <Play className="w-3 h-3 fill-current ml-0.5" />
-                      Watch
-                    </button>
+                    {anime.status === 'NOT_YET_RELEASED' || anime.isUnreleased ? (
+                      <span className="px-3 py-1 rounded-md bg-[#0d0b14] border border-amber-400/30 text-[11px] font-semibold text-amber-300">
+                        Coming soon
+                      </span>
+                    ) : (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onWatchAnime(anime.id, anime.airedEpisodes || 1);
+                          onClose();
+                        }}
+                        className="flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white text-xs font-bold rounded-full shadow transition-all"
+                      >
+                        <Play className="w-3 h-3 fill-current ml-0.5" />
+                        Watch
+                      </button>
+                    )}
                   </div>
                 </div>
               );

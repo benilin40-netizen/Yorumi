@@ -24,8 +24,11 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                 YORUMI
               </span>
             </div>
+            <p className="text-[#fafafa] font-semibold text-xs font-display">
+              Catch every episode as it airs.
+            </p>
             <p className="text-[#a1a1aa] leading-relaxed text-xs font-sans">
-              Your World. Your Anime. Premium discovery and streaming platform built with AniList GraphQL, live episode countdowns, and modular playback providers.
+              Stream currently airing anime across resilient providers with live release countdowns and timezone-aware airing schedules.
             </p>
           </div>
 
@@ -54,7 +57,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
           <div className="space-y-2.5">
             <h4 className="font-display font-extrabold text-[#fafafa] uppercase tracking-wider text-[11px]">Data & Integrations</h4>
             <p className="text-[#a1a1aa] leading-relaxed text-xs font-sans">
-              Anime metadata, seasonal schedules, and character information provided through AniList GraphQL.
+              Anime metadata, seasonal schedules, and release countdowns sourced server-side from AniList GraphQL with Jikan fallback.
             </p>
             <ul className="space-y-1.5 font-sans pt-1">
               <li>
@@ -73,7 +76,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
 
         {/* Bottom Attribution Line */}
         <div className="pt-6 border-t border-[#2a243a] flex flex-col sm:flex-row items-center justify-between gap-4 text-[#a1a1aa] text-[11px] font-sans">
-          <p>© {new Date().getFullYear()} YORUMI. Premium Anime Streaming. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} YORUMI — Catch every episode as it airs.</p>
           <div className="flex items-center gap-4">
             <button
               onClick={() => onNavigate('admin')}

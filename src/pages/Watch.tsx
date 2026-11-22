@@ -1,19 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Star, Lock, AlertTriangle, Play, Calendar, Tv, Clock, Search, CheckCircle2 } from 'lucide-react';
-import { Anime } from '../types/anime';
-import { getAnimeById } from '../services/anilist';
+import { ArrowLeft, Star, Clock, AlertCircle } from 'lucide-react';
+import { Anime, ConfirmedEpisodesResponse } from '../types/anime';
+import { getAnimeById, getAnimeEpisodes } from '../services/anilist';
 import { VideoPlayer } from '../components/player/VideoPlayer';
 import { AnimeCarousel } from '../components/anime/AnimeCarousel';
-import {
-  calculateAnimeEpisodeSchedule,
-  isEpisodePlayable,
-  syncEpisodeReleasesAndNotify,
-  fetchOfficialEpisodeTitles,
-  AnimeEpisodeSchedule,
-  EpisodeInfo,
-} from '../services/episodeService';
-import { CountdownCard } from '../components/countdown/CountdownCard';
-import { useUser } from '../contexts/UserContext';
 
 interface WatchProps {
   animeId: number;
@@ -22,40 +12,58 @@ interface WatchProps {
   onNavigateBack: () => void;
 }
 
+function formatNextCountdown(airingAt: number): string {
+  const diff = airingAt - Math.floor(Date.now() / 1000);
+  if (diff <= 0) return 'airing now';
+  const days = Math.floor(diff / 86400);
+  const hours = Math.floor((diff % 86400) / 3600);
+  const mins = Math.floor((diff % 3600) / 60);
+  if (days > 0) return `${days}d ${String(hours).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
+  return `${String(hours).padStart(2, '0')}h ${String(mins).padStart(2, '0')}m`;
+}
+
 export const Watch: React.FC<WatchProps> = ({
   animeId,
   initialEpisode = 1,
   onSelectAnime,
   onNavigateBack,
 }) => {
-  const { history } = useUser();
   const [anime, setAnime] = useState<Anime | null>(null);
+  const [epInfo, setEpInfo] = useState<ConfirmedEpisodesResponse | null>(null);
   const [currentEpisode, setCurrentEpisode] = useState<number>(initialEpisode);
   const [loading, setLoading] = useState(true);
-  const [episodeSearchQuery, setEpisodeSearchQuery] = useState('');
-  const [officialTitlesMap, setOfficialTitlesMap] = useState<Record<number, { title: string; synopsis?: string }>>({});
+  const [, setTick] = useState(0);
 
   useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 30000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     async function load() {
       setLoading(true);
-      const data = await getAnimeById(animeId);
+      const [data, episodesData] = await Promise.all([
+        getAnimeById(animeId),
+        getAnimeEpisodes(animeId),
+      ]);
+      if (!active) return;
       setAnime(data);
-      if (data) {
-        syncEpisodeReleasesAndNotify(data);
-        const schedule = calculateAnimeEpisodeSchedule(data);
-        if (initialEpisode > schedule.latestReleasedEpisode && schedule.latestReleasedEpisode > 0) {
-          setCurrentEpisode(schedule.latestReleasedEpisode);
-        } else {
-          setCurrentEpisode(initialEpisode);
-        }
+      setEpInfo(episodesData);
 
-        // Fetch official titles from Jikan
-        const titles = await fetchOfficialEpisodeTitles(data.id, data.idMal);
-        setOfficialTitlesMap(titles);
+      const airedCount = episodesData?.airedEpisodes?.length || 0;
+      if (airedCount > 0) {
+        const clamped = Math.min(Math.max(1, initialEpisode), airedCount);
+        setCurrentEpisode(clamped);
+      } else {
+        setCurrentEpisode(1);
       }
       setLoading(false);
     }
     load();
+    return () => {
+      active = false;
+    };
   }, [animeId, initialEpisode]);
 
   if (loading) {
@@ -71,7 +79,7 @@ export const Watch: React.FC<WatchProps> = ({
     return (
       <div className="max-w-7xl mx-auto px-4 lg:px-8 py-16 text-center space-y-4">
         <h2 className="text-xl font-bold text-white font-display">Anime Not Found</h2>
-        <p className="text-[#a1a1aa] text-sm">Could not load streaming catalog details for ID {animeId}.</p>
+        <p className="text-[#a1a1aa] text-sm">Could not load catalog details for AniList ID {animeId}.</p>
         <button
           onClick={onNavigateBack}
           className="px-5 py-2.5 bg-gradient-to-r from-purple-500 to-blue-500 text-white text-xs font-bold rounded-full shadow"
@@ -83,21 +91,10 @@ export const Watch: React.FC<WatchProps> = ({
   }
 
   const title = anime.title.english || anime.title.romaji;
-  const schedule: AnimeEpisodeSchedule = calculateAnimeEpisodeSchedule(anime);
-  const playableCheck = isEpisodePlayable(anime, currentEpisode);
-
-  // Check watched episodes from history
-  const watchedEpSet = new Set(
-    history.filter((h) => h.animeId === anime.id).map((h) => h.episode)
-  );
-
-  // Filter episodes by search query
-  const filteredEpisodes = schedule.episodes.filter((ep) => {
-    if (!episodeSearchQuery.trim()) return true;
-    const q = episodeSearchQuery.toLowerCase();
-    const epTitle = (ep.officialTitle || ep.title).toLowerCase();
-    return epTitle.includes(q) || ep.episodeNumber.toString().includes(q);
-  });
+  const airedEpisodes = epInfo?.airedEpisodes || [];
+  const airedCount = airedEpisodes.length;
+  const totalKnown = epInfo?.totalEpisodes ?? anime.episodes ?? null;
+  const nextEp = epInfo?.nextAiringEpisode || null;
 
   return (
     <div className="max-w-7xl mx-auto px-4 lg:px-8 py-6 space-y-8">
@@ -119,192 +116,96 @@ export const Watch: React.FC<WatchProps> = ({
         </button>
       </div>
 
-      {/* Progressive Release Verification Notice if Episode Not Playable */}
-      {!playableCheck.playable ? (
-        <div className="p-8 bg-[#161321] rounded-2xl border border-amber-500/30 text-center space-y-4 shadow-2xl font-sans">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center mx-auto text-amber-400">
-            <Lock className="w-6 h-6" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-white font-display">
-              Episode {currentEpisode} Is Not Available
-            </h3>
-            <p className="text-xs text-[#a1a1aa] mt-1 max-w-md mx-auto leading-relaxed">
-              {playableCheck.reason}
-            </p>
-          </div>
-
-          {schedule.latestReleasedEpisode > 0 && (
-            <button
-              onClick={() => setCurrentEpisode(schedule.latestReleasedEpisode)}
-              className="px-6 py-2.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white text-xs font-bold rounded-full shadow-lg transition-all"
-            >
-              Watch Latest Released Episode (Ep {schedule.latestReleasedEpisode})
-            </button>
-          )}
-        </div>
-      ) : (
-        /* Unified Streaming Video Player */
+      {/* Unified Streaming Video Player or Unaired Notice */}
+      {airedCount > 0 ? (
         <VideoPlayer
           anime={anime}
           currentEpisode={currentEpisode}
+          airedEpisodeCount={airedCount}
+          nextAiringEpisode={nextEp}
           onEpisodeChange={(ep) => setCurrentEpisode(ep)}
         />
+      ) : (
+        <div className="p-10 rounded-2xl bg-[#161321] border border-[#2a243a] text-center space-y-3">
+          <AlertCircle className="w-10 h-10 text-amber-400 mx-auto" />
+          <h2 className="font-display text-xl font-bold text-white">{title} — Coming Soon</h2>
+          <p className="text-xs text-[#a1a1aa] max-w-md mx-auto">
+            No episodes have aired yet for this title. Unaired episodes cannot be streamed until their release time.
+          </p>
+          {nextEp && (
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0d0b14] border border-purple-500/30 text-xs font-mono text-purple-300 tabular-nums">
+              <Clock className="w-3.5 h-3.5 text-purple-400" />
+              <span>
+                Next: EP {nextEp.episode} in {formatNextCountdown(nextEp.airingAt)}
+              </span>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Premium Episode List & Search Interface */}
-      <section className="space-y-4 p-6 bg-[#161321] rounded-2xl border border-[#2a243a] shadow-xl font-sans">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#2a243a] pb-4">
+      {/* Episode Selection Grid (Strictly Confirmed Aired Episodes Only — Never Padded) */}
+      <section className="space-y-4 p-6 bg-[#161321] rounded-2xl border border-[#2a243a] shadow-xl">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <div className="flex items-center gap-2">
-              <Tv className="w-5 h-5 text-purple-400" />
-              <h3 className="font-display text-lg font-bold text-white">
-                Episodes Catalogue ({schedule.latestReleasedEpisode} Available)
-              </h3>
-            </div>
-            <p className="text-xs text-[#a1a1aa] mt-0.5">
-              Official release schedule, episode titles, and playback status.
+            <h3 className="font-display text-lg font-bold text-white">
+              Aired Episodes ({airedCount}
+              {totalKnown ? ` / ${totalKnown}` : ' aired'})
+            </h3>
+            <p className="text-[11px] text-[#a1a1aa]">
+              Showing only episodes confirmed as aired by AniList schedule or streaming providers.
             </p>
           </div>
+          {airedCount > 0 && (
+            <span className="text-xs font-mono font-bold text-purple-400 tabular-nums">
+              Playing EP {currentEpisode}
+            </span>
+          )}
+        </div>
 
-          <div className="flex items-center gap-3">
-            {/* Episode Search Bar */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-[#a1a1aa] absolute left-3 top-2.5" />
-              <input
-                type="text"
-                placeholder="Search episode title or number..."
-                value={episodeSearchQuery}
-                onChange={(e) => setEpisodeSearchQuery(e.target.value)}
-                className="bg-[#0d0b14] border border-[#2a243a] rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-[#a1a1aa] outline-none focus:border-purple-500/60 w-48 sm:w-64"
-              />
+        {airedCount > 0 ? (
+          <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-12 gap-2 max-h-60 overflow-y-auto pr-1">
+            {airedEpisodes.map((epItem) => {
+              const isActive = epItem.episode === currentEpisode;
+              return (
+                <button
+                  key={epItem.episode}
+                  onClick={() => setCurrentEpisode(epItem.episode)}
+                  className={`py-2 rounded-lg text-xs font-mono font-bold transition-all tabular-nums ${
+                    isActive
+                      ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow'
+                      : 'bg-[#0d0b14] text-[#a1a1aa] hover:text-white hover:bg-[#201c2e] border border-[#2a243a]'
+                  }`}
+                >
+                  {epItem.episode}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-[#a1a1aa]">No aired episodes available yet.</p>
+        )}
+
+        {/* Unaired Next Episode Countdown Only (Never Playable) */}
+        {nextEp && (
+          <div className="pt-3 border-t border-[#2a243a] flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 text-purple-300 font-mono tabular-nums">
+              <Clock className="w-4 h-4 text-purple-400" />
+              <span>
+                Next: EP {nextEp.episode} in {formatNextCountdown(nextEp.airingAt)}
+              </span>
             </div>
-            <span className="px-2.5 py-1 bg-purple-500/10 border border-purple-500/30 text-purple-300 rounded-full text-[11px] font-mono font-bold">
-              {anime.status === 'RELEASING' ? 'AIRING' : 'FINISHED'}
+            <span className="text-[11px] text-[#a1a1aa] font-mono">
+              {new Date(nextEp.airingAt * 1000).toLocaleString([], {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
             </span>
           </div>
-        </div>
-
-        {/* Detailed Episode List Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 max-h-[500px] overflow-y-auto pr-1">
-          {filteredEpisodes.map((ep) => {
-            const isActive = ep.episodeNumber === currentEpisode;
-            const isReleased = ep.status === 'released' && ep.hasStreamSource;
-            const isWatched = watchedEpSet.has(ep.episodeNumber);
-            const officialInfo = officialTitlesMap[ep.episodeNumber];
-            const epDisplayTitle = officialInfo?.title
-              ? `Ep ${ep.episodeNumber} — ${officialInfo.title}`
-              : ep.officialTitle
-              ? `Ep ${ep.episodeNumber} — ${ep.officialTitle}`
-              : `Episode ${ep.episodeNumber < 10 ? '0' + ep.episodeNumber : ep.episodeNumber}`;
-
-            return (
-              <div
-                key={ep.episodeNumber}
-                onClick={() => {
-                  if (isReleased) setCurrentEpisode(ep.episodeNumber);
-                }}
-                className={`p-3.5 rounded-2xl border transition-all flex items-start gap-3.5 ${
-                  isActive
-                    ? 'bg-gradient-to-r from-purple-950/70 to-blue-950/70 border-purple-500 shadow-lg shadow-purple-950/50 ring-1 ring-purple-500/50'
-                    : isReleased
-                    ? 'bg-[#0d0b14] hover:bg-[#201c2e] border-[#2a243a] cursor-pointer'
-                    : 'bg-[#0d0b14]/40 border-[#2a243a]/30 text-zinc-500 cursor-not-allowed opacity-75'
-                }`}
-              >
-                {/* Thumbnail / Cover */}
-                <div className="relative w-16 h-20 rounded-xl overflow-hidden bg-[#161321] border border-[#2a243a] shrink-0">
-                  <img
-                    src={ep.thumbnail || anime.coverImage.large}
-                    alt={epDisplayTitle}
-                    className="w-full h-full object-cover"
-                  />
-                  {isWatched && (
-                    <div className="absolute top-1 right-1 bg-emerald-500 text-white rounded-full p-0.5 shadow">
-                      <CheckCircle2 className="w-3 h-3" />
-                    </div>
-                  )}
-                  {isActive && (
-                    <div className="absolute inset-0 bg-purple-600/40 flex items-center justify-center">
-                      <Play className="w-5 h-5 text-white fill-white animate-pulse" />
-                    </div>
-                  )}
-                </div>
-
-                {/* Details */}
-                <div className="flex-1 min-w-0 space-y-1">
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-[10px] font-mono font-bold text-purple-400">
-                      EPISODE {ep.episodeNumber}
-                    </span>
-                    <span
-                      className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.2 rounded ${
-                        isReleased
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          : ep.status === 'upcoming'
-                          ? 'bg-zinc-800 text-zinc-400'
-                          : 'bg-amber-500/10 text-amber-400'
-                      }`}
-                    >
-                      {ep.statusLabel}
-                    </span>
-                  </div>
-
-                  <h4 className={`text-xs font-bold truncate ${isActive ? 'text-white font-display' : 'text-zinc-200'}`}>
-                    {epDisplayTitle}
-                  </h4>
-
-                  <p className="text-[11px] text-[#a1a1aa] line-clamp-1">
-                    {officialInfo?.synopsis || ep.releaseDateFormatted || 'Official Episode Broadcast'}
-                  </p>
-
-                  <div className="pt-1 flex items-center justify-between">
-                    {isReleased ? (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCurrentEpisode(ep.episodeNumber);
-                        }}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all ${
-                          isActive
-                            ? 'bg-purple-600 text-white shadow'
-                            : 'bg-[#161321] hover:bg-purple-600/30 text-purple-300 border border-[#2a243a]'
-                        }`}
-                      >
-                        <Play className="w-2.5 h-2.5 fill-current" />
-                        {isActive ? 'Playing Now' : isWatched ? 'Watch Again' : 'Watch Ep'}
-                      </button>
-                    ) : (
-                      <span className="text-[10px] text-zinc-500 flex items-center gap-1">
-                        <Lock className="w-3 h-3" /> Unreleased
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        )}
       </section>
-
-      {/* Next Airing Countdown Card if Airing */}
-      {anime.nextAiringEpisode && (
-        <div className="p-6 bg-[#161321] rounded-2xl border border-purple-500/30 space-y-3 shadow-xl font-sans">
-          <div className="flex items-center gap-2">
-            <Clock className="w-4 h-4 text-purple-400" />
-            <h3 className="font-display text-sm font-bold text-white">Next Upcoming Episode Airing Schedule</h3>
-          </div>
-          <CountdownCard
-            anime={anime}
-            episodeNumber={anime.nextAiringEpisode.episode}
-            airingAtTimestamp={anime.nextAiringEpisode.airingAt}
-            onSelect={onSelectAnime}
-            onWatch={(id, ep) => {
-              if (ep) setCurrentEpisode(ep);
-            }}
-          />
-        </div>
-      )}
 
       {/* Anime Overview Box */}
       <div className="p-6 bg-[#161321] rounded-2xl border border-[#2a243a] flex flex-col md:flex-row gap-6 shadow-xl">
@@ -319,7 +220,7 @@ export const Watch: React.FC<WatchProps> = ({
           <div className="flex flex-wrap items-center gap-2 text-xs text-[#a1a1aa]">
             <span>{anime.format || 'TV'}</span>
             <span>·</span>
-            <span>{anime.seasonYear || 'N/A'}</span>
+            <span>{anime.seasonYear || anime.startDate?.year || 'N/A'}</span>
             {anime.averageScore && (
               <>
                 <span>·</span>
@@ -344,9 +245,7 @@ export const Watch: React.FC<WatchProps> = ({
             .map((n) => n.mediaRecommendation)
             .filter(Boolean)}
           onSelectAnime={onSelectAnime}
-          onWatchAnime={(id) => {
-            onSelectAnime(id);
-          }}
+          onWatchAnime={(id) => onSelectAnime(id)}
         />
       )}
     </div>

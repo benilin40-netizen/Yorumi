@@ -10,10 +10,10 @@ interface StatsProps {
 
 export const DashboardStats: React.FC<StatsProps> = ({ userCount, animeCount, episodeCount, watchActivity }) => {
   const stats = [
-    { label: 'Total Users', value: userCount.toLocaleString(), icon: Users, color: 'text-purple-400' },
-    { label: 'Total Anime', value: animeCount.toLocaleString(), icon: Film, color: 'text-blue-400' },
-    { label: 'Total Episodes', value: episodeCount.toLocaleString(), icon: Tv, color: 'text-pink-400' },
-    { label: 'Watch Events', value: watchActivity.toLocaleString(), icon: Play, color: 'text-emerald-400' },
+    { label: 'Registered Accounts', value: userCount.toLocaleString(), icon: Users, color: 'text-purple-400' },
+    { label: 'Saved In Watchlist', value: animeCount.toLocaleString(), icon: Film, color: 'text-blue-400' },
+    { label: 'Playback Sessions', value: episodeCount.toLocaleString(), icon: Tv, color: 'text-pink-400' },
+    { label: 'History Events', value: watchActivity.toLocaleString(), icon: Play, color: 'text-emerald-400' },
   ];
 
   return (

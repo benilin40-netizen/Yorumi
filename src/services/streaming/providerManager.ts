@@ -1,84 +1,92 @@
-import { AudioOption, ProviderHealth, StreamEmbedConfig } from '../../types/anime';
-import { getJutsuUrl } from './jutsu';
+import {
+  AudioOption,
+  ProviderHealth,
+  ProviderId,
+  ProviderMode,
+  SourcesResolutionResponse,
+} from '../../types/anime';
 
-export type ProviderId = 'jutsu';
-
-export interface ProviderDefinition {
-  id: ProviderId;
-  name: string;
-  badge: string;
-  description: string;
-  supportsDub: boolean;
-  mirrors: string[];
-}
-
-export const PROVIDERS: ProviderDefinition[] = [
-  {
-    id: 'jutsu',
-    name: 'Jutsu / AniFlow',
-    badge: 'Sub & Dub',
-    description: 'High-performance dedicated streaming engine with direct M3U8 HLS manifest routing and server flows.',
-    supportsDub: true,
-    mirrors: ['Embed Server Flow', 'M3U8 Direct HLS', 'MAL Embed Route'],
-  },
+export const PROVIDERS_META: { id: ProviderId; name: string; supportsDub: boolean }[] = [
+  { id: 'yenime', name: 'Yenime', supportsDub: false },
+  { id: 'aniembed', name: 'AniEmbed', supportsDub: true },
+  { id: 'kuroko', name: 'Kuroko', supportsDub: true },
 ];
 
 const PREFERRED_PROVIDER_KEY = 'yorumi_preferred_provider';
-const PROVIDER_STATUS_KEY = 'yorumi_provider_status_overrides';
+const PROVIDER_MODE_KEY = 'yorumi_provider_mode';
 
-export function getPreferredProvider(): ProviderId {
-  return 'jutsu';
+export function isValidProviderId(val: unknown): val is ProviderId {
+  return val === 'yenime' || val === 'aniembed' || val === 'kuroko';
 }
 
-export function setPreferredProvider(providerId: ProviderId) {
-  localStorage.setItem(PREFERRED_PROVIDER_KEY, providerId);
-}
-
-export function getProviderConfig(
-  providerId: ProviderId,
-  params: {
-    anilistId: number;
-    malId?: number | null;
-    episode: number;
-    audio?: AudioOption;
-    mirrorIndex?: number;
+export function getStoredProviderMode(): ProviderMode {
+  try {
+    const raw = localStorage.getItem(PROVIDER_MODE_KEY);
+    return raw === 'manual' ? 'manual' : 'auto';
+  } catch {
+    return 'auto';
   }
-): StreamEmbedConfig {
-  const { anilistId, malId, episode, audio = 'sub', mirrorIndex = 0 } = params;
-  const mode = mirrorIndex === 1 ? 'm3u8' : 'embed';
-  const useMal = mirrorIndex === 2;
+}
 
-  return getJutsuUrl({
-    anilistId,
-    malId,
-    episode,
-    audio,
+export function getStoredPreferredProvider(): ProviderId {
+  try {
+    const raw = localStorage.getItem(PREFERRED_PROVIDER_KEY);
+    return isValidProviderId(raw) ? raw : 'yenime';
+  } catch {
+    return 'yenime';
+  }
+}
+
+export function saveProviderPreference(mode: ProviderMode, providerId: ProviderId) {
+  try {
+    localStorage.setItem(PROVIDER_MODE_KEY, mode);
+    localStorage.setItem(PREFERRED_PROVIDER_KEY, providerId);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export async function fetchAvailableProviders(): Promise<{
+  kurokoEnabled: boolean;
+  providers: ProviderHealth[];
+}> {
+  const res = await fetch('/api/providers');
+  if (!res.ok) {
+    throw new Error('Failed to load streaming providers');
+  }
+  return res.json();
+}
+
+export async function resolveEpisodeSources(params: {
+  anilistId: number;
+  episode: number;
+  lang: AudioOption;
+  autoplay?: 0 | 1;
+  startSeconds?: number;
+  mode: 'auto' | ProviderId;
+}): Promise<SourcesResolutionResponse> {
+  const { anilistId, episode, lang, autoplay = 0, startSeconds = 0, mode } = params;
+  const qs = new URLSearchParams({
+    lang,
+    autoplay: String(autoplay),
+    t: String(Math.max(0, Math.floor(startSeconds))),
     mode,
-    useMal,
   });
+  const res = await fetch(`/api/sources/${anilistId}/${episode}?${qs.toString()}`);
+  if (!res.ok) {
+    throw new Error(`Source resolution failed (${res.status})`);
+  }
+  return res.json();
 }
 
-export function getProviderHealthList(): ProviderHealth[] {
-  const storedOverrides = localStorage.getItem(PROVIDER_STATUS_KEY);
-  const overrides = storedOverrides ? JSON.parse(storedOverrides) : {};
-
-  return PROVIDERS.map((p) => {
-    const isOverridden = overrides[p.id] !== undefined;
-    return {
-      id: p.id,
-      name: p.name,
-      status: isOverridden ? (overrides[p.id] ? 'healthy' : 'offline') : 'healthy',
-      latencyMs: Math.floor(Math.random() * 20) + 45,
-      lastChecked: Date.now(),
-      enabled: isOverridden ? overrides[p.id] : true,
-      notes: p.description,
-    };
-  });
-}
-
-export function toggleProviderEnabled(providerId: ProviderId, enabled: boolean) {
-  const storedOverrides = localStorage.getItem(PROVIDER_STATUS_KEY);
-  const overrides = storedOverrides ? JSON.parse(storedOverrides) : {};
-  overrides[providerId] = enabled;
-  localStorage.setItem(PROVIDER_STATUS_KEY, JSON.stringify(overrides));
+export async function reportProviderFailure(providerId: ProviderId, reason: string): Promise<void> {
+  try {
+    await fetch('/api/sources/report-failure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId, reason }),
+    });
+  } catch {
+    // ignore telemetry failure
+  }
 }

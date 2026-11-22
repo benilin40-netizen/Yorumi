@@ -1,339 +1,13 @@
-import { Anime } from '../types/anime';
-import { aniListManager } from './anilistManager';
-import { FALLBACK_ANIME_CATALOG } from './animeService';
+import { Anime, ConfirmedEpisodesResponse } from '../types/anime';
 
-const MEDIA_FIELDS = `
-  id
-  idMal
-  title {
-    english
-    romaji
-    native
-  }
-  coverImage {
-    extraLarge
-    large
-    medium
-    color
-  }
-  bannerImage
-  description(asHtml: false)
-  genres
-  averageScore
-  popularity
-  season
-  seasonYear
-  episodes
-  duration
-  status
-  format
-  isAdult
-  nextAiringEpisode {
-    id
-    episode
-    airingAt
-    timeUntilAiring
-  }
-  trailer {
-    id
-    site
-    thumbnail
-  }
-  studios(isMain: true) {
-    nodes {
-      id
-      name
-      isAnimationStudio
-    }
-  }
-`;
-
-const MEDIA_FIELDS_FULL = `
-  ${MEDIA_FIELDS}
-  characters(sort: ROLE, perPage: 12) {
-    edges {
-      role
-      node {
-        id
-        name {
-          full
-          native
-        }
-        image {
-          large
-        }
-      }
-    }
-  }
-  staff(perPage: 8) {
-    edges {
-      role
-      node {
-        id
-        name {
-          full
-        }
-      }
-    }
-  }
-  relations {
-    edges {
-      relationType
-      node {
-        ${MEDIA_FIELDS}
-      }
-    }
-  }
-  recommendations(perPage: 10, sort: RATING_DESC) {
-    nodes {
-      mediaRecommendation {
-        ${MEDIA_FIELDS}
-      }
-    }
-  }
-`;
-
-async function fetchGraphQL<T>(query: string, variables: Record<string, any> = {}): Promise<T> {
-  return aniListManager.request<T>(query, variables);
-}
-
-export async function getTrendingAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
-  const query = `
-    query ($page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(sort: TRENDING_DESC, type: ANIME, isAdult: false) {
-          ${MEDIA_FIELDS}
-        }
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { page, perPage });
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList getTrendingAnime error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  }
-}
-
-export async function getPopularAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
-  const query = `
-    query ($page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(sort: POPULARITY_DESC, type: ANIME, isAdult: false) {
-          ${MEDIA_FIELDS}
-        }
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { page, perPage });
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList getPopularAnime error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  }
-}
-
-export async function getTopRatedAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
-  const query = `
-    query ($page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(sort: SCORE_DESC, type: ANIME, isAdult: false) {
-          ${MEDIA_FIELDS}
-        }
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { page, perPage });
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList getTopRatedAnime error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  }
-}
-
-export async function getSeasonalAnime(season?: string, year?: number, page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
-  const now = new Date();
-  const currentYear = year || now.getFullYear();
-  let currentSeason = season;
-  if (!currentSeason) {
-    const month = now.getMonth() + 1;
-    if (month >= 1 && month <= 3) currentSeason = 'WINTER';
-    else if (month >= 4 && month <= 6) currentSeason = 'SPRING';
-    else if (month >= 7 && month <= 9) currentSeason = 'SUMMER';
-    else currentSeason = 'FALL';
-  }
-
-  const query = `
-    query ($season: MediaSeason, $seasonYear: Int, $page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(season: $season, seasonYear: $seasonYear, sort: POPULARITY_DESC, type: ANIME, isAdult: false) {
-          ${MEDIA_FIELDS}
-        }
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { season: currentSeason, seasonYear: currentYear, page, perPage });
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList getSeasonalAnime error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  }
-}
-
-export async function getUpcomingAnime(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
-  const query = `
-    query ($page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(status: NOT_YET_RELEASED, sort: POPULARITY_DESC, type: ANIME, isAdult: false) {
-          ${MEDIA_FIELDS}
-        }
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { page, perPage });
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList getUpcomingAnime error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  }
-}
-
-export async function getAnimeMovies(page = 1, perPage = 12): Promise<{ media: Anime[]; pageInfo: any }> {
-  const query = `
-    query ($page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(format: MOVIE, sort: POPULARITY_DESC, type: ANIME, isAdult: false) {
-          ${MEDIA_FIELDS}
-        }
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { page, perPage });
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList getAnimeMovies error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  }
-}
-
-export async function getAnimeById(id: number): Promise<Anime | null> {
-  const query = `
-    query ($id: Int) {
-      Media(id: $id, type: ANIME) {
-        ${MEDIA_FIELDS_FULL}
-      }
-    }
-  `;
-  try {
-    const data = await fetchGraphQL<any>(query, { id });
-    return data?.Media || FALLBACK_ANIME_CATALOG.find((a) => a.id === id) || FALLBACK_ANIME_CATALOG[0];
-  } catch (err) {
-    console.error(`Error fetching anime by ID ${id}, using fallback:`, err);
-    return FALLBACK_ANIME_CATALOG.find((a) => a.id === id) || FALLBACK_ANIME_CATALOG[0];
-  }
-}
-
-export async function getAiringSchedule(airingAtGreater: number, airingAtLesser: number, page = 1, perPage = 50): Promise<any[]> {
-  const query = `
-    query ($airingAtGreater: Int, $airingAtLesser: Int, $page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        airingSchedules(airingAt_greater: $airingAtGreater, airingAt_lesser: $airingAtLesser, sort: TIME) {
-          id
-          airingAt
-          timeUntilAiring
-          episode
-          media {
-            ${MEDIA_FIELDS}
-          }
-        }
-      }
-    }
-  `;
-  try {
-    const data = await aniListManager.request<any>(query, { airingAtGreater, airingAtLesser, page, perPage }, 900000);
-    return data?.Page?.airingSchedules || [];
-  } catch (err) {
-    console.error('Error fetching airing schedule:', err);
-    return [];
-  }
+export interface HomeFeedResponse {
+  hero: Anime[];
+  recentlyUpdated: Anime[];
+  trendingAiring: Anime[];
+  topRatedAiring: Anime[];
+  upcoming: Anime[];
+  movies: Anime[];
+  schedule: any[];
 }
 
 export interface DiscoverFilters {
@@ -348,81 +22,143 @@ export interface DiscoverFilters {
   perPage?: number;
 }
 
-export async function searchAnime(filters: DiscoverFilters = {}): Promise<{ media: Anime[]; pageInfo: any }> {
-  const {
-    search,
-    genre,
-    year,
-    season,
-    format,
-    status,
-    sort = 'POPULARITY_DESC',
-    page = 1,
-    perPage = 18,
-  } = filters;
-
-  const variables: Record<string, any> = {
-    page,
-    perPage,
-    type: 'ANIME',
-    isAdult: false,
-    sort: [sort],
-  };
-
-  if (search && search.trim() !== '') variables.search = search.trim();
-  if (genre) variables.genre = genre;
-  if (year) variables.seasonYear = year;
-  if (season) variables.season = season;
-  if (format) variables.format = format;
-  if (status) variables.status = status;
-
-  const query = `
-    query (
-      $page: Int,
-      $perPage: Int,
-      $search: String,
-      $genre: String,
-      $seasonYear: Int,
-      $season: MediaSeason,
-      $format: MediaFormat,
-      $status: MediaStatus,
-      $sort: [MediaSort]
-    ) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          total
-          currentPage
-          lastPage
-          hasNextPage
-        }
-        media(
-          search: $search,
-          genre: $genre,
-          seasonYear: $seasonYear,
-          season: $season,
-          format: $format,
-          status: $status,
-          sort: $sort,
-          type: ANIME,
-          isAdult: false
-        ) {
-          ${MEDIA_FIELDS}
-        }
+async function getJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  const contentType = res.headers.get('content-type') || '';
+  if (!res.ok || !contentType.includes('application/json')) {
+    let errText = `API request failed: ${res.status}`;
+    try {
+      const text = await res.text();
+      if (text.trim().startsWith('{')) {
+        const json = JSON.parse(text);
+        if (json.error) errText = json.error;
+      } else if (text.includes('<!doctype') || text.includes('<html')) {
+        errText = `API endpoint returned HTML instead of JSON (HTTP ${res.status}). Check server routing.`;
+      } else if (text.trim()) {
+        errText = text.slice(0, 150);
       }
+    } catch {
+      // ignore parse fail
     }
-  `;
-
-  try {
-    const data = await fetchGraphQL<any>(query, variables);
-    return {
-      media: data?.Page?.media || FALLBACK_ANIME_CATALOG,
-      pageInfo: data?.Page?.pageInfo || { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
-  } catch (err) {
-    console.warn('AniList searchAnime error, using fallback catalog:', err);
-    return {
-      media: FALLBACK_ANIME_CATALOG,
-      pageInfo: { total: FALLBACK_ANIME_CATALOG.length, currentPage: 1, lastPage: 1, hasNextPage: false },
-    };
+    throw new Error(`API request to ${url} failed (HTTP ${res.status}): ${errText.slice(0, 100)}`);
   }
+  return res.json();
+}
+
+export async function getHomeFeed(): Promise<HomeFeedResponse> {
+  return getJson<HomeFeedResponse>('/api/home');
+}
+
+export async function getTrendingAnime(
+  page = 1,
+  perPage = 18
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  return getJson(`/api/anime/trending?page=${page}&perPage=${perPage}`);
+}
+
+export async function getTrendingAiringAnime(
+  page = 1,
+  perPage = 14
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  return getJson(`/api/anime/trending?page=${page}&perPage=${perPage}&airingOnly=true`);
+}
+
+export async function getTopRatedAiringAnime(
+  page = 1,
+  perPage = 14
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  return getJson(`/api/anime/top-rated-airing?page=${page}&perPage=${perPage}`);
+}
+
+export const getTopRatedAnime = getTopRatedAiringAnime;
+
+export async function getRecentlyUpdatedAiring(limit = 16): Promise<{ media: Anime[] }> {
+  return getJson(`/api/anime/recently-updated?limit=${limit}`);
+}
+
+export async function getPopularAnime(
+  page = 1,
+  perPage = 18
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  return getJson(`/api/anime/popular?page=${page}&perPage=${perPage}`);
+}
+
+export async function getSeasonalAnime(
+  season?: string,
+  year?: number,
+  page = 1,
+  perPage = 24
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  const qs = new URLSearchParams({ page: String(page), perPage: String(perPage) });
+  if (season) qs.set('season', season);
+  if (year) qs.set('year', String(year));
+  return getJson(`/api/anime/seasonal?${qs.toString()}`);
+}
+
+export async function getUpcomingAnime(
+  page = 1,
+  perPage = 24
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  return getJson(`/api/anime/upcoming?page=${page}&perPage=${perPage}`);
+}
+
+export async function getAnimeMovies(
+  page = 1,
+  perPage = 24,
+  releasedOnly = false
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  return getJson(`/api/anime/movies?page=${page}&perPage=${perPage}&releasedOnly=${releasedOnly}`);
+}
+
+export async function getAnimeById(id: number): Promise<Anime | null> {
+  try {
+    const res = await getJson<{ media: Anime }>(`/api/anime/${id}`);
+    return res.media || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getAnimeEpisodes(id: number): Promise<ConfirmedEpisodesResponse | null> {
+  try {
+    return await getJson<ConfirmedEpisodesResponse>(`/api/anime/${id}/episodes`);
+  } catch {
+    return null;
+  }
+}
+
+export async function getAiringSchedule(
+  airingAtGreater: number,
+  airingAtLesser: number,
+  page = 1,
+  perPage = 50
+): Promise<any[]> {
+  try {
+    const qs = new URLSearchParams({
+      start: String(airingAtGreater),
+      end: String(airingAtLesser),
+      page: String(page),
+      perPage: String(perPage),
+    });
+    const res = await getJson<{ schedules: any[] }>(`/api/anime/schedule?${qs.toString()}`);
+    return res.schedules || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function searchAnime(
+  filters: DiscoverFilters = {}
+): Promise<{ media: Anime[]; pageInfo: any; isFallback?: boolean }> {
+  const qs = new URLSearchParams();
+  if (filters.search) qs.set('search', filters.search);
+  if (filters.genre) qs.set('genre', filters.genre);
+  if (filters.year) qs.set('year', String(filters.year));
+  if (filters.season) qs.set('season', filters.season);
+  if (filters.format) qs.set('format', filters.format);
+  if (filters.status) qs.set('status', filters.status);
+  if (filters.sort) qs.set('sort', filters.sort);
+  if (filters.page) qs.set('page', String(filters.page));
+  if (filters.perPage) qs.set('perPage', String(filters.perPage));
+  return getJson(`/api/anime/search?${qs.toString()}`);
 }

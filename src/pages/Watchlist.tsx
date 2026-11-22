@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Bookmark, Trash2, Play } from 'lucide-react';
+import { Bookmark, Trash2, Play, RefreshCw } from 'lucide-react';
 import { useUser } from '../contexts/UserContext';
+import { useAuth } from '../contexts/AuthContext';
 import { WatchStatus } from '../types/anime';
 
 interface WatchlistProps {
@@ -9,40 +10,81 @@ interface WatchlistProps {
 }
 
 export const Watchlist: React.FC<WatchlistProps> = ({ onSelectAnime, onWatchAnime }) => {
-  const { watchlist, favorites, removeFromWatchlist, updateWatchlist } = useUser();
-  const [activeTab, setActiveTab] = useState<'ALL' | WatchStatus | 'FAVORITES'>('ALL');
+  const {
+    watchlist,
+    favorites,
+    removeFromWatchlist,
+    updateWatchlist,
+    refreshSupabaseUserData,
+  } = useUser();
+  const { user: supabaseUser, openAuthModal } = useAuth();
+  const [activeTab, setActiveTab] = useState<'ALL' | 'WATCHING' | 'PLANNING' | 'COMPLETED' | 'FAVORITE'>('ALL');
+  const [refreshing, setRefreshing] = useState(false);
 
   const filteredItems =
-    activeTab === 'FAVORITES'
-      ? favorites.map((anime) => ({ anime, status: 'PLANNING' as WatchStatus, userScore: null, lastWatchedEpisode: 1, updatedAt: Date.now() }))
+    activeTab === 'FAVORITE'
+      ? watchlist.filter((item) => item.status === 'FAVORITE' || item.isFavorite)
       : activeTab === 'ALL'
       ? watchlist
       : watchlist.filter((item) => item.status === activeTab);
 
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await refreshSupabaseUserData();
+    setRefreshing(false);
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 lg:px-8 py-8 space-y-8">
       {/* Header */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-3">
-          <Bookmark className="w-8 h-8 text-purple-400" />
-          <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-            My Anime <span className="brand-gradient-text">Collection</span>
-          </h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <Bookmark className="w-8 h-8 text-purple-400" />
+            <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+              My <span className="brand-gradient-text">List</span>
+            </h1>
+          </div>
+          <p className="text-sm text-[#a1a1aa] font-sans">
+            Organize titles across Watching, Plan, Completed, and Favorite categories.
+          </p>
         </div>
-        <p className="text-sm text-[#a1a1aa] font-sans">
-          Manage your personal watchlist, track episode progress, rate titles, and view favorite anime entries.
-        </p>
+
+        <div className="flex items-center gap-2">
+          {supabaseUser ? (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#161321] border border-[#2a243a] text-xs font-semibold text-white hover:border-purple-500/40"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-purple-400 ${refreshing ? 'animate-spin' : ''}`} />
+              Sync My List
+            </button>
+          ) : (
+            <button
+              onClick={() => openAuthModal('signin')}
+              className="px-4 py-2 rounded-full bg-gradient-to-r from-purple-500 to-blue-500 text-xs font-bold text-white shadow"
+            >
+              Sign In to Sync
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs Toolbar */}
       <div className="flex flex-wrap items-center gap-2 p-1.5 bg-[#161321] rounded-full border border-[#2a243a] text-xs font-semibold">
         {[
-          { id: 'ALL', label: `All Saved (${watchlist.length})` },
-          { id: 'WATCHING', label: 'Currently Watching' },
-          { id: 'PLANNING', label: 'Plan to Watch' },
+          { id: 'ALL', label: `All (${watchlist.length})` },
+          { id: 'WATCHING', label: 'Watching' },
+          { id: 'PLANNING', label: 'Plan' },
           { id: 'COMPLETED', label: 'Completed' },
-          { id: 'DROPPED', label: 'Dropped' },
-          { id: 'FAVORITES', label: `Favorites (${favorites.length})` },
+          {
+            id: 'FAVORITE',
+            label: `Favorite (${Math.max(
+              favorites.length,
+              watchlist.filter((w) => w.status === 'FAVORITE' || w.isFavorite).length
+            )})`,
+          },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -62,9 +104,9 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onSelectAnime, onWatchAnim
       {filteredItems.length === 0 ? (
         <div className="p-16 text-center bg-[#161321] rounded-2xl border border-[#2a243a] space-y-3">
           <Bookmark className="w-12 h-12 text-purple-500/30 mx-auto" />
-          <h3 className="text-base font-bold text-white font-display">No items in this collection</h3>
+          <h3 className="text-base font-bold text-white font-display">No items in this list</h3>
           <p className="text-xs text-[#a1a1aa] max-w-sm mx-auto font-sans">
-            Browse anime titles in the Discover or Trending hubs and click the bookmark button to add them here.
+            Click the bookmark icon on any anime card or open an anime details page to add titles to your list.
           </p>
         </div>
       ) : (
@@ -100,13 +142,20 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onSelectAnime, onWatchAnim
                   <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     <select
                       value={item.status}
-                      onChange={(e) => updateWatchlist(anime, e.target.value as WatchStatus)}
+                      onChange={(e) =>
+                        updateWatchlist(
+                          anime,
+                          e.target.value as WatchStatus,
+                          item.userScore,
+                          item.lastWatchedEpisode
+                        )
+                      }
                       className="bg-[#0d0b14] text-[#fafafa] text-xs rounded-full px-3 py-1 border border-[#2a243a] outline-none font-sans"
                     >
                       <option value="WATCHING" className="bg-[#161321]">Watching</option>
-                      <option value="PLANNING" className="bg-[#161321]">Plan to Watch</option>
+                      <option value="PLANNING" className="bg-[#161321]">Plan</option>
                       <option value="COMPLETED" className="bg-[#161321]">Completed</option>
-                      <option value="DROPPED" className="bg-[#161321]">Dropped</option>
+                      <option value="FAVORITE" className="bg-[#161321]">Favorite</option>
                     </select>
                   </div>
 
@@ -129,7 +178,7 @@ export const Watchlist: React.FC<WatchlistProps> = ({ onSelectAnime, onWatchAnim
                         removeFromWatchlist(anime.id);
                       }}
                       className="p-1.5 text-[#a1a1aa] hover:text-rose-400 transition-colors"
-                      title="Remove from Watchlist"
+                      title="Remove from My List"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>

@@ -31,11 +31,20 @@ export const Upcoming: React.FC<PageProps> = ({ onSelectAnime, onWatchAnime }) =
           <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
             Upcoming <span className="brand-gradient-text">Anime Releases</span>
           </h1>
-          <p className="text-sm text-[#a1a1aa] font-sans">Newly announced anime and upcoming season premieres</p>
+          <p className="text-sm text-[#a1a1aa] font-sans">
+            Newly announced anime and upcoming season premieres with release countdowns
+          </p>
         </div>
       </div>
 
-      <AnimeGrid animeList={animeList} onSelectAnime={onSelectAnime} onWatchAnime={onWatchAnime} loading={loading} />
+      <AnimeGrid
+        animeList={animeList}
+        onSelectAnime={onSelectAnime}
+        onWatchAnime={onWatchAnime}
+        loading={loading}
+        hideWatchButton
+        showCountdown
+      />
     </div>
   );
 };

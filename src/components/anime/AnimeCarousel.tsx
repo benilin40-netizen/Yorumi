@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { motion } from 'motion/react';
 import { Anime } from '../../types/anime';
 import { AnimeCard } from './AnimeCard';
 
@@ -10,6 +11,10 @@ interface AnimeCarouselProps {
   onSelectAnime: (id: number) => void;
   onWatchAnime: (id: number, episode?: number) => void;
   onSeeAll?: () => void;
+  showEpisodeBadge?: boolean;
+  showRelativeTime?: boolean;
+  hideWatchButton?: boolean;
+  showCountdown?: boolean;
 }
 
 export const AnimeCarousel: React.FC<AnimeCarouselProps> = ({
@@ -19,6 +24,10 @@ export const AnimeCarousel: React.FC<AnimeCarouselProps> = ({
   onSelectAnime,
   onWatchAnime,
   onSeeAll,
+  showEpisodeBadge = false,
+  showRelativeTime = false,
+  hideWatchButton = false,
+  showCountdown = false,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -31,15 +40,20 @@ export const AnimeCarousel: React.FC<AnimeCarouselProps> = ({
 
   if (!animeList || animeList.length === 0) return null;
 
-  // Split title words to make last word gradient text
   const words = title.split(' ');
   const firstWords = words.slice(0, -1).join(' ');
   const lastWord = words[words.length - 1];
 
   return (
-    <section className="space-y-4">
+    <motion.section
+      initial={{ opacity: 0, x: 60 }}
+      whileInView={{ opacity: 1, x: 0 }}
+      viewport={{ once: true, amount: 0.12 }}
+      transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+      className="space-y-4"
+    >
       {/* Section Header */}
-      <div className="flex items-end justify-between">
+      <div className="flex items-end justify-between gap-4">
         <div>
           <h2 className="font-display text-xl sm:text-2xl font-extrabold text-white tracking-tight">
             {firstWords ? `${firstWords} ` : ''}
@@ -50,11 +64,11 @@ export const AnimeCarousel: React.FC<AnimeCarouselProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {onSeeAll && (
             <button
               onClick={onSeeAll}
-              className="text-xs font-bold text-purple-400 hover:text-purple-300 transition-colors mr-2"
+              className="text-xs font-bold text-purple-400 hover:text-purple-300 transition-colors mr-2 whitespace-nowrap"
             >
               See All
             </button>
@@ -77,21 +91,36 @@ export const AnimeCarousel: React.FC<AnimeCarouselProps> = ({
         </div>
       </div>
 
-      {/* Horizontal Sideways Rail with hidden scrollbar */}
+      {/* Staggered Horizontal Sideways Rail */}
       <div
         ref={scrollRef}
-        className="flex items-center gap-4 sm:gap-5 overflow-x-auto no-scrollbar pb-3 pt-1 -mx-2 px-2 scroll-smooth"
+        className="flex items-start gap-4 sm:gap-5 overflow-x-auto no-scrollbar pb-3 pt-1 -mx-2 px-2 scroll-smooth"
       >
-        {animeList.map((anime) => (
-          <div key={anime.id} className="w-[150px] sm:w-[175px] shrink-0">
+        {animeList.map((anime, index) => (
+          <motion.div
+            key={anime.id}
+            initial={{ opacity: 0, x: 36 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true, amount: 0.1 }}
+            transition={{
+              duration: 0.35,
+              delay: Math.min(index * 0.04, 0.35),
+              ease: [0.16, 1, 0.3, 1],
+            }}
+            className="w-[150px] sm:w-[175px] shrink-0"
+          >
             <AnimeCard
               anime={anime}
               onSelect={onSelectAnime}
               onWatch={onWatchAnime}
+              showEpisodeBadge={showEpisodeBadge}
+              showRelativeTime={showRelativeTime}
+              hideWatchButton={hideWatchButton}
+              showCountdown={showCountdown}
             />
-          </div>
+          </motion.div>
         ))}
       </div>
-    </section>
+    </motion.section>
   );
 };

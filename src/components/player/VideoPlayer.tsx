@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Play,
   Maximize2,
   Minimize2,
   AlertTriangle,
@@ -10,254 +9,318 @@ import {
   Radio,
   Moon,
   RotateCcw,
-  Sliders,
-  Activity,
-  Check,
-  RefreshCw,
-  Info,
-  X,
-  FastForward,
   Sparkles,
+  CheckCircle2,
+  Pause,
+  Play,
 } from 'lucide-react';
-import Hls from 'hls.js';
-import { Anime, AudioOption } from '../../types/anime';
 import {
-  PROVIDERS,
+  Anime,
+  AudioOption,
   ProviderId,
-  getPreferredProvider,
-  setPreferredProvider,
-  getProviderConfig,
+  ProviderMode,
+  ResolvedSource,
+} from '../../types/anime';
+import {
+  resolveEpisodeSources,
+  reportProviderFailure,
 } from '../../services/streaming/providerManager';
 import { useUser } from '../../contexts/UserContext';
-import { getNextPlayableEpisode, EpisodeInfo } from '../../services/episodeService';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface VideoPlayerProps {
   anime: Anime;
   currentEpisode: number;
+  airedEpisodeCount: number;
+  nextAiringEpisode?: { episode: number; airingAt: number } | null;
   onEpisodeChange: (ep: number) => void;
-  onClosePlayer?: () => void;
 }
 
-interface StreamDiagnosticLog {
-  id: string;
-  time: string;
-  type: 'info' | 'warn' | 'error' | 'recovery';
-  message: string;
-}
+const IFRAME_LOAD_TIMEOUT_MS = 8000;
+const PROGRESS_SAVE_INTERVAL_MS = 15000;
 
-const AUTOPLAY_STORAGE_KEY = 'yorumi_autoplay_next_v1';
+function formatMmSs(totalSec: number): string {
+  const s = Math.max(0, Math.floor(totalSec));
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   anime,
   currentEpisode,
+  airedEpisodeCount,
+  nextAiringEpisode,
   onEpisodeChange,
 }) => {
-  const { addHistoryRecord } = useUser();
-  const [activeProvider, setActiveProvider] = useState<ProviderId>(getPreferredProvider());
-  const [audio, setAudio] = useState<AudioOption>('sub');
-  const [mirrorIndex, setMirrorIndex] = useState(0);
-  const [hasError, setHasError] = useState(false);
+  const {
+    saveWatchProgress,
+    getResumePosition,
+    preferredProvider,
+    providerMode,
+    preferredLang,
+    setProviderPreference,
+    setPreferredLang,
+  } = useUser();
+  const { trackEvent } = useAuth();
+
+  const [mode, setMode] = useState<ProviderMode>(providerMode);
+  const [manualProvider, setManualProvider] = useState<ProviderId>(preferredProvider);
+  const [audio, setAudio] = useState<AudioOption>(preferredLang);
+  const [isPausedTracker, setIsPausedTracker] = useState(false);
+
+  const [kurokoEnabled, setKurokoEnabled] = useState<boolean>(true);
+  const [activeSource, setActiveSource] = useState<ResolvedSource | null>(null);
+  const [fallbackQueue, setFallbackQueue] = useState<ResolvedSource[]>([]);
+  const [allEnabledSources, setAllEnabledSources] = useState<ResolvedSource[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [resumedFromSec, setResumedFromSec] = useState<number>(0);
   const [theaterMode, setTheaterMode] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Auto-Play Next & Preview Overlay State
-  const [autoPlayNext, setAutoPlayNext] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem(AUTOPLAY_STORAGE_KEY);
-      return saved !== null ? JSON.parse(saved) : true;
-    } catch {
-      return true;
-    }
-  });
-  const [showNextOverlay, setShowNextOverlay] = useState<boolean>(false);
-  const [nextCountdown, setNextCountdown] = useState<number>(10);
-  const [nextEpInfo, setNextEpInfo] = useState<EpisodeInfo | null>(null);
-  const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Synchronization & Diagnostics State
-  const [audioDelayMs, setAudioDelayMs] = useState<number>(0);
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [diagnosticLogs, setDiagnosticLogs] = useState<StreamDiagnosticLog[]>([]);
-  const [bufferHealth, setBufferHealth] = useState<string>('Normal');
-  const [recoveryCount, setRecoveryCount] = useState<number>(0);
+  const [iframeKey, setIframeKey] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const elapsedRef = useRef<number>(0);
+  const lastEpisodeKeyRef = useRef<string>('');
+  const durationSeconds = Math.max(60, (anime.duration || 24) * 60);
 
   const title = anime.title.english || anime.title.romaji;
-  const totalEpisodes = anime.episodes || 24;
 
-  const config = getProviderConfig(activeProvider, {
-    anilistId: anime.id,
-    malId: anime.idMal,
-    episode: currentEpisode,
-    audio,
-    mirrorIndex,
-  });
-
-  const addLog = (message: string, type: StreamDiagnosticLog['type'] = 'info') => {
-    setDiagnosticLogs((prev) => [
-      {
-        id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        time: new Date().toLocaleTimeString(),
-        type,
-        message,
-      },
-      ...prev.slice(0, 49),
-    ]);
-  };
-
-  // Toggle Auto-Play Preference
-  const handleToggleAutoPlay = (enabled: boolean) => {
-    setAutoPlayNext(enabled);
-    localStorage.setItem(AUTOPLAY_STORAGE_KEY, JSON.stringify(enabled));
-    if (!enabled && countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-    }
-  };
-
-  // Check next episode availability & reset overlays when episode changes
+  // Keep audio synced with profile preferredLang if updated on login
   useEffect(() => {
-    addHistoryRecord(anime, currentEpisode, 120);
-    setHasError(false);
-    setIsLoading(true);
-    setShowNextOverlay(false);
-    setNextCountdown(10);
+    setAudio(preferredLang);
+  }, [preferredLang]);
 
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 5500);
+  }, []);
+
+  const clearLoadTimeout = useCallback(() => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
     }
+  }, []);
 
-    const nextPlayable = getNextPlayableEpisode(anime, currentEpisode);
-    setNextEpInfo(nextPlayable);
+  const flushProgress = useCallback(
+    (forceSec?: number) => {
+      const pos = forceSec ?? elapsedRef.current;
+      saveWatchProgress({
+        anime,
+        episode: currentEpisode,
+        positionSeconds: pos,
+        durationSeconds,
+      }).catch(() => {});
+    },
+    [anime, currentEpisode, durationSeconds, saveWatchProgress]
+  );
 
-    addLog(`Initialized player for "${title}" Ep ${currentEpisode} [${activeProvider.toUpperCase()} - ${audio.toUpperCase()}]`);
-  }, [anime.id, currentEpisode, activeProvider, audio, mirrorIndex]);
-
-  // HLS.js initialization & thorough cleanup
-  useEffect(() => {
-    if (!config.isHls || !config.url) return;
-
-    let currentHls: Hls | null = null;
-    const videoElement = videoRef.current;
-
-    if (videoElement) {
-      if (Hls.isSupported()) {
-        currentHls = new Hls({
-          enableWorker: true,
-          lowLatencyMode: true,
-          backBufferLength: 90,
-          maxBufferLength: 30,
-        });
-        hlsRef.current = currentHls;
-
-        currentHls.loadSource(config.url);
-        currentHls.attachMedia(videoElement);
-
-        currentHls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setIsLoading(false);
-          addLog('HLS manifest parsed successfully. Audio/Video tracks aligned.');
-          setBufferHealth('Optimal (Buffered)');
-        });
-
-        currentHls.on(Hls.Events.ERROR, (_event, data) => {
-          if (data.fatal) {
-            addLog(`Fatal HLS error: ${data.details} (type: ${data.type})`, 'error');
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                addLog('Attempting network error recovery...', 'recovery');
-                currentHls?.startLoad();
-                setRecoveryCount((c) => c + 1);
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                addLog('Attempting media decoding recovery...', 'recovery');
-                currentHls?.recoverMediaError();
-                setRecoveryCount((c) => c + 1);
-                break;
-              default:
-                setHasError(true);
-                setIsLoading(false);
-                currentHls?.destroy();
-                break;
-            }
-          } else {
-            addLog(`Non-fatal HLS warning: ${data.details}`, 'warn');
-          }
-        });
-      } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-        videoElement.src = config.url;
-        setIsLoading(false);
-        addLog('Using native Safari HLS player support.');
+  const triggerFailover = useCallback(
+    (failedSource: ResolvedSource | null, reason: string) => {
+      clearLoadTimeout();
+      if (failedSource) {
+        reportProviderFailure(failedSource.id, reason);
       }
+
+      if (fallbackQueue.length > 0) {
+        const [nextSource, ...rest] = fallbackQueue;
+        const failedLabel = failedSource?.name || 'Provider';
+        showToast(`${failedLabel} failed, switching to ${nextSource.name}`);
+        trackEvent('provider_switch', {
+          anilist_id: anime.id,
+          episode_number: currentEpisode,
+          provider_id: nextSource.id,
+          metadata: { from: failedSource?.id || null, reason },
+        });
+        setActiveSource(nextSource);
+        setFallbackQueue(rest);
+        setHasError(false);
+        setIsLoading(true);
+        setIframeKey((k) => k + 1);
+      } else {
+        setHasError(true);
+        setIsLoading(false);
+      }
+    },
+    [anime.id, clearLoadTimeout, currentEpisode, fallbackQueue, showToast, trackEvent]
+  );
+
+  // Resolve sources via backend /api/sources/:anilistId/:episode
+  const fetchAndLoadSources = useCallback(
+    async (
+      targetMode: ProviderMode,
+      targetProvider: ProviderId,
+      targetAudio: AudioOption,
+      startSeconds: number
+    ) => {
+      clearLoadTimeout();
+      setIsLoading(true);
+      setHasError(false);
+
+      try {
+        const res = await resolveEpisodeSources({
+          anilistId: anime.id,
+          episode: currentEpisode,
+          lang: targetAudio,
+          autoplay: 1,
+          startSeconds,
+          mode: targetMode === 'auto' ? 'auto' : targetProvider,
+        });
+
+        setKurokoEnabled(res.kurokoEnabled);
+        setAllEnabledSources(res.allEnabled);
+
+        if (!res.selected) {
+          setActiveSource(null);
+          setFallbackQueue([]);
+          setHasError(true);
+          setIsLoading(false);
+          return;
+        }
+
+        if (
+          targetMode === 'auto' &&
+          res.failedChecks.length > 0 &&
+          res.selected.id !== res.failedChecks[0].id
+        ) {
+          showToast(`${res.failedChecks[0].name} failed, switching to ${res.selected.name}`);
+        }
+
+        setActiveSource(res.selected);
+        setFallbackQueue(res.fallbacks);
+        setIframeKey((k) => k + 1);
+        setProviderPreference(targetMode, res.selected.id);
+        trackEvent('episode_watch', {
+          anilist_id: anime.id,
+          episode_number: currentEpisode,
+          provider_id: res.selected.id,
+          metadata: { lang: targetAudio, mode: targetMode, startSeconds },
+        });
+      } catch (err) {
+        console.error('Failed to resolve episode sources:', err);
+        setHasError(true);
+        setIsLoading(false);
+      }
+    },
+    [anime.id, currentEpisode, clearLoadTimeout, setProviderPreference, showToast, trackEvent]
+  );
+
+  useEffect(() => {
+    const epKey = `${anime.id}:${currentEpisode}`;
+    let startAt = elapsedRef.current;
+
+    if (lastEpisodeKeyRef.current !== epKey) {
+      lastEpisodeKeyRef.current = epKey;
+      const savedPos = getResumePosition(anime.id, currentEpisode);
+      startAt = savedPos;
+      elapsedRef.current = savedPos;
+      setResumedFromSec(savedPos > 5 ? savedPos : 0);
+      setIsPausedTracker(false);
+      // Record initial episode watch immediately so it enters history / Continue watching
+      saveWatchProgress({
+        anime,
+        episode: currentEpisode,
+        positionSeconds: savedPos,
+        durationSeconds,
+      }).catch(() => {});
     }
+
+    fetchAndLoadSources(mode, manualProvider, audio, startAt);
 
     return () => {
-      if (currentHls) {
-        currentHls.detachMedia();
-        currentHls.destroy();
-        hlsRef.current = null;
-        addLog('HLS player instance destroyed and media detached.');
+      clearLoadTimeout();
+    };
+  }, [anime.id, currentEpisode, mode, manualProvider, audio]);
+
+  // Playback progress tracker: increment elapsed seconds, auto-save every 15s, save on pause/visibilitychange/exit
+  useEffect(() => {
+    if (hasError || !activeSource) return;
+
+    const secTimer = window.setInterval(() => {
+      if (!isLoading && !isPausedTracker && document.visibilityState === 'visible') {
+        elapsedRef.current = Math.min(durationSeconds, elapsedRef.current + 1);
       }
-      if (videoElement) {
-        videoElement.pause();
-        videoElement.src = '';
-        videoElement.load();
+    }, 1000);
+
+    const saveTimer = window.setInterval(() => {
+      if (!isLoading && !isPausedTracker) {
+        flushProgress();
+      }
+    }, PROGRESS_SAVE_INTERVAL_MS);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        flushProgress();
       }
     };
-  }, [config.url, config.isHls]);
 
-  // Handle Video Time Update & Ended Event for Auto-Play Countdown
-  const triggerAutoPlayCountdown = () => {
-    if (showNextOverlay || !nextEpInfo) return;
+    const handleExit = () => {
+      flushProgress();
+    };
 
-    setShowNextOverlay(true);
-    setNextCountdown(10);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handleExit);
+    window.addEventListener('beforeunload', handleExit);
 
-    if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+    return () => {
+      window.clearInterval(secTimer);
+      window.clearInterval(saveTimer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handleExit);
+      window.removeEventListener('beforeunload', handleExit);
+      flushProgress();
+    };
+  }, [hasError, activeSource, isLoading, isPausedTracker, durationSeconds, flushProgress]);
 
-    countdownTimerRef.current = setInterval(() => {
-      setNextCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(countdownTimerRef.current!);
-          countdownTimerRef.current = null;
-          if (autoPlayNext && nextEpInfo) {
-            onEpisodeChange(nextEpInfo.episodeNumber);
-          }
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+  // 8-second iframe load timeout for cross-origin embed failover
+  useEffect(() => {
+    if (!activeSource || !isLoading || hasError) return;
+
+    clearLoadTimeout();
+    timeoutRef.current = window.setTimeout(() => {
+      triggerFailover(activeSource, 'Iframe load timeout (8s)');
+    }, IFRAME_LOAD_TIMEOUT_MS);
+
+    return () => clearLoadTimeout();
+  }, [activeSource, iframeKey, isLoading, hasError, clearLoadTimeout, triggerFailover]);
+
+  const handleSelectAuto = () => {
+    setMode('auto');
+    setProviderPreference('auto', activeSource?.id || manualProvider);
   };
 
-  const handleCancelAutoPlay = () => {
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-    setShowNextOverlay(false);
+  const handleSelectManualProvider = (id: ProviderId) => {
+    setMode('manual');
+    setManualProvider(id);
+    setProviderPreference('manual', id);
+    trackEvent('provider_switch', {
+      anilist_id: anime.id,
+      episode_number: currentEpisode,
+      provider_id: id,
+      metadata: { manual: true },
+    });
   };
 
-  const handlePlayNow = () => {
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-    if (nextEpInfo) {
-      onEpisodeChange(nextEpInfo.episodeNumber);
-    }
+  const handleSelectAudio = (nextLang: AudioOption) => {
+    setAudio(nextLang);
+    setPreferredLang(nextLang);
   };
 
-  const handleProviderSelect = (providerId: ProviderId) => {
-    setActiveProvider(providerId);
-    setPreferredProvider(providerId);
-    setMirrorIndex(0);
-    setHasError(false);
-    setIsLoading(true);
-    addLog(`Switched streaming provider to ${providerId.toUpperCase()}`);
+  const handleTogglePauseTracker = () => {
+    const nextPaused = !isPausedTracker;
+    setIsPausedTracker(nextPaused);
+    if (nextPaused) {
+      flushProgress();
+      showToast(`Progress saved at ${formatMmSs(elapsedRef.current)}`);
+    }
   };
 
   const handleToggleFullscreen = () => {
@@ -271,6 +334,22 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
+  const providerButtons: { id: ProviderId; label: string }[] = [
+    { id: 'yenime', label: 'Yenime' },
+    { id: 'aniembed', label: 'AniEmbed' },
+    ...(kurokoEnabled ? [{ id: 'kuroko' as ProviderId, label: 'Kuroko' }] : []),
+  ];
+
+  const formatCountdown = (airingAt: number) => {
+    const diff = airingAt - Math.floor(Date.now() / 1000);
+    if (diff <= 0) return 'airing soon';
+    const d = Math.floor(diff / 86400);
+    const h = Math.floor((diff % 86400) / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    if (d > 0) return `${d}d ${String(h).padStart(2, '0')}h`;
+    return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m`;
+  };
+
   return (
     <div
       ref={containerRef}
@@ -278,76 +357,91 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         theaterMode ? 'ring-4 ring-purple-600/50 shadow-purple-900/50' : ''
       }`}
     >
+      {/* Failover / Progress Toast Banner */}
+      {toastMessage && (
+        <div
+          role="status"
+          className="absolute top-16 right-4 z-40 px-4 py-2.5 rounded-xl bg-[#0d0b14]/95 border border-amber-400/40 text-amber-200 text-xs font-semibold shadow-2xl flex items-center gap-2 backdrop-blur-md"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Player Top Bar */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 bg-[#0d0b14] border-b border-[#2a243a]">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3.5 bg-[#0d0b14] border-b border-[#2a243a]">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-2.5 h-2.5 rounded-full bg-purple-400 animate-pulse" />
           <h2 className="text-sm sm:text-base font-bold text-white truncate font-display">
-            {title} <span className="text-purple-400 font-mono font-medium ml-1">· Ep {currentEpisode}</span>
+            {title}{' '}
+            <span className="text-purple-400 font-mono font-medium ml-1 tabular-nums">
+              · EP {currentEpisode}
+            </span>
           </h2>
+          {activeSource && (
+            <span className="hidden md:inline-flex items-center gap-1 text-[11px] font-mono text-emerald-400">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              {mode === 'auto' ? `Auto (${activeSource.name})` : activeSource.name}
+            </span>
+          )}
+          {resumedFromSec > 5 && (
+            <span className="hidden lg:inline-block px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-[10px] font-mono text-purple-300 tabular-nums">
+              Resumed {formatMmSs(resumedFromSec)}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Auto-Play Next Toggle Pill */}
-          <button
-            onClick={() => handleToggleAutoPlay(!autoPlayNext)}
-            className={`px-3 py-1 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${
-              autoPlayNext
-                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50'
-                : 'bg-zinc-800/60 text-zinc-400 border border-zinc-700'
-            }`}
-            title="Toggle Auto-Play Next Episode"
-          >
-            <FastForward className="w-3.5 h-3.5" />
-            <span>Auto-Play: {autoPlayNext ? 'ON' : 'OFF'}</span>
-          </button>
-
-          {/* Audio Selector (SUB / DUB) */}
-          <div className="flex items-center p-0.5 bg-[#161321] rounded-full border border-[#2a243a] text-xs">
+          {/* Sub / Dub Toggle */}
+          <div className="flex items-center p-0.5 bg-[#161321] rounded-lg border border-[#2a243a] text-xs">
             <button
-              onClick={() => setAudio('sub')}
-              className={`px-3 py-1 rounded-full font-bold transition-all ${
-                audio === 'sub' ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow' : 'text-[#a1a1aa] hover:text-white'
+              onClick={() => handleSelectAudio('sub')}
+              className={`px-3 py-1 rounded-md font-bold transition-all whitespace-nowrap ${
+                audio === 'sub'
+                  ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow'
+                  : 'text-[#a1a1aa] hover:text-white'
               }`}
             >
               SUB
             </button>
             <button
-              onClick={() => setAudio('dub')}
-              className={`px-3 py-1 rounded-full font-bold transition-all ${
-                audio === 'dub' ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow' : 'text-[#a1a1aa] hover:text-white'
+              onClick={() => handleSelectAudio('dub')}
+              className={`px-3 py-1 rounded-md font-bold transition-all whitespace-nowrap ${
+                audio === 'dub'
+                  ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow'
+                  : 'text-[#a1a1aa] hover:text-white'
               }`}
             >
               DUB
             </button>
           </div>
 
-          {/* Diagnostics Toggle */}
           <button
-            onClick={() => setShowDiagnostics(!showDiagnostics)}
-            className={`p-2 rounded-full text-xs transition-colors ${
-              showDiagnostics ? 'bg-purple-600 text-white' : 'glass-panel border border-[#2a243a] text-[#a1a1aa] hover:text-white'
+            onClick={handleTogglePauseTracker}
+            className={`p-2 rounded-lg text-xs transition-colors ${
+              isPausedTracker
+                ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
+                : 'bg-[#161321] border border-[#2a243a] text-[#a1a1aa] hover:text-white'
             }`}
-            title="Toggle Sync Diagnostics"
+            title={isPausedTracker ? 'Resume Progress Sync' : 'Pause & Save Progress'}
           >
-            <Activity className="w-4 h-4" />
+            {isPausedTracker ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
           </button>
 
-          {/* Theater Mode Toggle */}
           <button
             onClick={() => setTheaterMode(!theaterMode)}
-            className={`p-2 rounded-full text-xs transition-colors ${
-              theaterMode ? 'bg-purple-600 text-white' : 'glass-panel border border-[#2a243a] text-[#a1a1aa] hover:text-white'
+            className={`p-2 rounded-lg text-xs transition-colors ${
+              theaterMode
+                ? 'bg-purple-600 text-white'
+                : 'bg-[#161321] border border-[#2a243a] text-[#a1a1aa] hover:text-white'
             }`}
             title="Toggle Theater Mode"
           >
             <Moon className="w-4 h-4" />
           </button>
 
-          {/* Fullscreen Toggle */}
           <button
             onClick={handleToggleFullscreen}
-            className="p-2 rounded-full glass-panel border border-[#2a243a] text-[#a1a1aa] hover:text-white transition-colors"
+            className="p-2 rounded-lg bg-[#161321] border border-[#2a243a] text-[#a1a1aa] hover:text-white transition-colors"
             title="Toggle Fullscreen"
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -355,301 +449,143 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       </div>
 
-      {/* Video Viewport & Overlay Panels */}
+      {/* Video Viewport */}
       <div className="relative aspect-video w-full bg-black flex items-center justify-center overflow-hidden">
         {isLoading && !hasError && (
-          <div className="absolute inset-0 z-20 bg-black/75 flex flex-col items-center justify-center gap-3">
+          <div className="absolute inset-0 z-20 bg-black/80 flex flex-col items-center justify-center gap-3">
             <div className="w-10 h-10 border-3 border-purple-500 border-t-transparent rounded-full animate-spin" />
-            <p className="text-xs text-[#a1a1aa] font-semibold">Loading {PROVIDERS.find((p) => p.id === activeProvider)?.name} stream...</p>
+            <p className="text-xs text-[#a1a1aa] font-semibold">
+              Connecting to {activeSource?.name || 'stream provider'}...
+            </p>
           </div>
         )}
 
-        {hasError ? (
+        {hasError || !activeSource ? (
           <div className="absolute inset-0 z-30 bg-[#0d0b14]/95 p-6 flex flex-col items-center justify-center text-center gap-4">
             <AlertTriangle className="w-12 h-12 text-amber-400" />
             <div>
-              <h3 className="text-base font-bold text-white font-display">Streaming Route Unavailable</h3>
+              <h3 className="text-base font-bold text-white font-display">
+                All Enabled Providers Unavailable
+              </h3>
               <p className="text-xs text-[#a1a1aa] mt-1 max-w-md font-sans">
-                The current stream route encountered an issue or rate limit. Switch to an alternate Jutsu server mirror below:
+                The selected stream failed to respond. Retry or manually switch providers below.
               </p>
             </div>
-
-            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-              <button
-                onClick={() => {
-                  setMirrorIndex((prev) => (prev + 1) % 3);
-                  setHasError(false);
-                  setIsLoading(true);
-                  addLog('Switched to alternate mirror server index.');
-                }}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white text-xs font-bold rounded-full shadow-lg transition-all"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                Switch to Next Server Mirror
-              </button>
-            </div>
+            <button
+              onClick={() => fetchAndLoadSources('auto', manualProvider, audio, elapsedRef.current)}
+              className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white text-xs font-bold rounded-lg shadow-lg transition-all"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Retry Auto-Select
+            </button>
           </div>
-        ) : config.isHls ? (
-          <video
-            ref={videoRef}
-            controls
-            autoPlay
-            playsInline
-            className="w-full h-full object-contain"
-            onPlay={() => setIsLoading(false)}
-            onEnded={triggerAutoPlayCountdown}
-            onTimeUpdate={(e) => {
-              const el = e.currentTarget;
-              if (el.duration && el.duration - el.currentTime <= 10 && !showNextOverlay && nextEpInfo) {
-                triggerAutoPlayCountdown();
-              }
-            }}
-            onWaiting={() => {
-              setBufferHealth('Stalled / Buffering');
-              addLog('Playback buffering stalled', 'warn');
-            }}
-            onPlaying={() => {
-              setBufferHealth('Optimal (Playing)');
-              setIsLoading(false);
-            }}
-            onError={() => {
-              setHasError(true);
-              setIsLoading(false);
-              addLog('HTML5 video element emitted decode/network error', 'error');
-            }}
-          />
         ) : (
           <iframe
-            src={config.url}
-            title={`${title} - Episode ${currentEpisode}`}
+            key={`${activeSource.id}-${iframeKey}`}
+            src={activeSource.url}
+            title={`${title} - Episode ${currentEpisode} (${activeSource.name})`}
             className="w-full h-full border-0"
             allowFullScreen
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            onLoad={() => setIsLoading(false)}
-            onError={() => {
-              setHasError(true);
+            referrerPolicy="no-referrer"
+            onLoad={() => {
+              clearLoadTimeout();
               setIsLoading(false);
-              addLog('Embed iframe failed to load stream URL', 'error');
+              setProviderPreference(mode, activeSource.id);
+            }}
+            onError={() => {
+              triggerFailover(activeSource, 'Iframe error event');
             }}
           />
         )}
-
-        {/* Next Episode Auto-Play Preview Overlay */}
-        {showNextOverlay && nextEpInfo && (
-          <div className="absolute bottom-6 right-6 z-40 bg-[#0d0b14]/95 border border-purple-500/50 p-4 rounded-2xl shadow-2xl backdrop-blur-md max-w-sm w-full animate-in slide-in-from-bottom font-sans">
-            <div className="flex items-center justify-between border-b border-[#2a243a] pb-2.5 mb-3">
-              <div className="flex items-center gap-2">
-                <FastForward className="w-4 h-4 text-purple-400" />
-                <span className="font-display font-bold text-white text-xs uppercase tracking-wider">
-                  Up Next · Ep {nextEpInfo.episodeNumber}
-                </span>
-              </div>
-              <button
-                onClick={handleCancelAutoPlay}
-                className="text-[#a1a1aa] hover:text-white p-1 rounded-lg"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="flex items-start gap-3">
-              <img
-                src={nextEpInfo.thumbnail || anime.coverImage.large}
-                alt={nextEpInfo.title}
-                className="w-16 h-20 rounded-xl object-cover border border-[#2a243a] shrink-0"
-              />
-              <div className="space-y-1 min-w-0 flex-1">
-                <h4 className="text-xs font-bold text-white line-clamp-2">{nextEpInfo.title}</h4>
-                <p className="text-[11px] text-purple-300 font-mono">
-                  Starting in <strong className="text-white font-bold">{nextCountdown}s</strong>
-                </p>
-                <div className="flex items-center gap-2 pt-2">
-                  <button
-                    onClick={handlePlayNow}
-                    className="px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white font-bold text-xs rounded-full shadow flex items-center gap-1 transition-all"
-                  >
-                    <Play className="w-3 h-3 fill-current" /> Play Now
-                  </button>
-                  <button
-                    onClick={handleCancelAutoPlay}
-                    className="px-3 py-1.5 bg-[#161321] hover:bg-[#201c2e] border border-[#2a243a] text-[#a1a1aa] hover:text-white text-xs font-semibold rounded-full transition-all"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Diagnostics Modal / Overlay Panel */}
-        {showDiagnostics && (
-          <div className="absolute inset-y-0 right-0 w-full sm:w-96 bg-[#0d0b14]/95 backdrop-blur-md border-l border-[#2a243a] p-5 z-40 flex flex-col shadow-2xl animate-in slide-in-from-right font-sans">
-            <div className="flex items-center justify-between border-b border-[#2a243a] pb-3 mb-3">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-purple-400" />
-                <h3 className="font-display font-bold text-white text-xs uppercase tracking-wider">
-                  Sync & Stream Diagnostics
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowDiagnostics(false)}
-                className="text-[#a1a1aa] hover:text-white text-xs p-1"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-[11px] font-mono text-[#a1a1aa] flex-1 overflow-y-auto pr-1">
-              <div className="p-2.5 bg-[#161321] rounded-xl border border-[#2a243a] space-y-1">
-                <div className="flex justify-between">
-                  <span>Provider:</span>
-                  <span className="text-white font-bold">{activeProvider.toUpperCase()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Audio Mode:</span>
-                  <span className="text-purple-300 font-bold">{audio.toUpperCase()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Buffer Health:</span>
-                  <span className="text-emerald-400">{bufferHealth}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Recovery Count:</span>
-                  <span className="text-amber-300">{recoveryCount}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Auto-Play Next:</span>
-                  <span className={autoPlayNext ? 'text-purple-400 font-bold' : 'text-zinc-500'}>
-                    {autoPlayNext ? 'ENABLED' : 'DISABLED'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Audio Delay Control */}
-              <div className="p-3 bg-[#161321] rounded-xl border border-[#2a243a] space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-white font-display text-xs">Audio Lip-Sync Offset</span>
-                  <span className="text-purple-400 text-xs font-bold">{audioDelayMs} ms</span>
-                </div>
-                <div className="flex items-center gap-2 pt-1">
-                  <input
-                    type="range"
-                    min={-500}
-                    max={500}
-                    step={50}
-                    value={audioDelayMs}
-                    onChange={(e) => setAudioDelayMs(parseInt(e.target.value, 10))}
-                    className="w-full accent-purple-500 cursor-pointer"
-                  />
-                  <button
-                    onClick={() => setAudioDelayMs(0)}
-                    className="px-2.5 py-1 bg-[#0d0b14] border border-[#2a243a] hover:border-purple-500 text-white text-[10px] font-bold rounded-lg shrink-0"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-
-              {/* Event Log Stream */}
-              <div className="space-y-1 pt-1">
-                <span className="font-display font-bold text-white text-xs block mb-1">Live Sync Event Log</span>
-                {diagnosticLogs.map((log) => (
-                  <div key={log.id} className="p-2 bg-[#161321] rounded border border-[#2a243a]/50 flex items-start gap-2">
-                    <span className="text-zinc-500 shrink-0">{log.time}</span>
-                    <span
-                      className={`truncate ${
-                        log.type === 'error'
-                          ? 'text-rose-400'
-                          : log.type === 'warn'
-                          ? 'text-amber-400'
-                          : log.type === 'recovery'
-                          ? 'text-blue-400'
-                          : 'text-zinc-300'
-                      }`}
-                    >
-                      {log.message}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Provider Selector & Episode Controls Bar */}
+      {/* Visible Provider Switcher & Episode Controls Bar */}
       <div className="p-4 sm:p-6 bg-[#161321] space-y-4">
-        {/* Provider Switcher Row */}
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[#2a243a]">
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-purple-400" />
-            <span className="text-xs font-bold text-[#fafafa]">Streaming Engine:</span>
+            <span className="text-xs font-bold text-[#fafafa]">Provider:</span>
           </div>
 
+          {/* [Auto] [Yenime] [AniEmbed] [Kuroko] */}
           <div className="flex flex-wrap items-center gap-2">
-            {PROVIDERS.map((provider) => {
-              const isActive = activeProvider === provider.id;
+            <button
+              onClick={handleSelectAuto}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                mode === 'auto'
+                  ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg'
+                  : 'bg-[#0d0b14] border border-[#2a243a] text-[#a1a1aa] hover:text-white'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Auto</span>
+            </button>
+
+            {providerButtons.map((pb) => {
+              const isSelectedManual = mode === 'manual' && manualProvider === pb.id;
+              const isActiveInAuto = mode === 'auto' && activeSource?.id === pb.id;
+              const serverEnabled =
+                allEnabledSources.length === 0 || allEnabledSources.some((s) => s.id === pb.id);
+
               return (
                 <button
-                  key={provider.id}
-                  onClick={() => handleProviderSelect(provider.id)}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold transition-all ${
-                    isActive
+                  key={pb.id}
+                  disabled={!serverEnabled}
+                  onClick={() => handleSelectManualProvider(pb.id)}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap disabled:opacity-40 ${
+                    isSelectedManual
                       ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-lg'
-                      : 'glass-panel border border-[#2a243a] text-[#a1a1aa] hover:text-white hover:bg-[#201c2e]'
+                      : isActiveInAuto
+                      ? 'bg-purple-500/20 border border-purple-500/50 text-purple-200'
+                      : 'bg-[#0d0b14] border border-[#2a243a] text-[#a1a1aa] hover:text-white'
                   }`}
                 >
                   <Tv className="w-3.5 h-3.5" />
-                  <span>{provider.name}</span>
+                  <span>{pb.label}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Mirror Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-[#a1a1aa]">Server:</span>
-            <select
-              value={mirrorIndex}
-              onChange={(e) => {
-                setMirrorIndex(parseInt(e.target.value, 10));
-                setHasError(false);
-                setIsLoading(true);
-                addLog(`Switched server mirror to index ${e.target.value}`);
-              }}
-              className="bg-[#0d0b14] text-[#fafafa] text-xs rounded-full px-3 py-1 border border-[#2a243a] outline-none"
+          {fallbackQueue.length > 0 && activeSource && (
+            <button
+              onClick={() => triggerFailover(activeSource, 'Manual failover requested by viewer')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0d0b14] border border-[#2a243a] text-[11px] font-semibold text-[#a1a1aa] hover:text-white transition-colors whitespace-nowrap"
             >
-              {PROVIDERS.find((p) => p.id === activeProvider)?.mirrors.map((m, idx) => (
-                <option key={idx} value={idx} className="bg-[#161321]">
-                  {m}
-                </option>
-              ))}
-            </select>
-          </div>
+              <RotateCcw className="w-3 h-3" />
+              Switch to Next ({fallbackQueue[0].name})
+            </button>
+          )}
         </div>
 
-        {/* Episode Navigation Row */}
-        <div className="flex items-center justify-between gap-4">
+        {/* Episode Navigation Row (Strictly Confirmed Aired Episodes Only) */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <button
             disabled={currentEpisode <= 1}
             onClick={() => onEpisodeChange(currentEpisode - 1)}
-            className="flex items-center gap-2 px-4 py-2 glass-panel border border-[#2a243a] disabled:opacity-40 text-[#fafafa] hover:text-white text-xs font-bold rounded-full transition-all"
+            className="flex items-center gap-2 px-4 py-2 bg-[#0d0b14] border border-[#2a243a] disabled:opacity-40 text-[#fafafa] hover:text-white text-xs font-bold rounded-lg transition-all"
           >
             <ChevronLeft className="w-4 h-4" />
             Previous Ep
           </button>
 
-          <span className="text-xs font-mono font-bold text-purple-300">
-            Episode {currentEpisode} of {totalEpisodes}
-          </span>
+          <div className="text-center">
+            <span className="text-xs font-mono font-bold text-purple-300 tabular-nums">
+              Episode {currentEpisode}
+              {anime.episodes ? ` of ${anime.episodes}` : ` (${airedEpisodeCount} aired)`}
+            </span>
+            {nextAiringEpisode && (
+              <span className="block text-[11px] font-mono text-[#a1a1aa] mt-0.5 tabular-nums">
+                Next: EP {nextAiringEpisode.episode} in {formatCountdown(nextAiringEpisode.airingAt)}
+              </span>
+            )}
+          </div>
 
           <button
-            disabled={!nextEpInfo}
-            onClick={() => {
-              if (nextEpInfo) onEpisodeChange(nextEpInfo.episodeNumber);
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 disabled:opacity-40 text-white text-xs font-bold rounded-full shadow transition-all"
+            disabled={currentEpisode >= airedEpisodeCount}
+            onClick={() => onEpisodeChange(currentEpisode + 1)}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 disabled:opacity-40 text-white text-xs font-bold rounded-lg shadow transition-all"
           >
             Next Ep
             <ChevronRight className="w-4 h-4" />

@@ -43,13 +43,17 @@ export interface AnimeTrailer {
   thumbnail?: string | null;
 }
 
-export type EpisodeStatus = 'upcoming' | 'airing' | 'released' | 'delayed' | 'unavailable';
-
 export interface AiringEpisode {
   id: number;
   episode: number;
   airingAt: number; // Unix timestamp
   timeUntilAiring: number; // seconds
+}
+
+export interface AnimeFuzzyDate {
+  year: number | null;
+  month: number | null;
+  day: number | null;
 }
 
 export interface AnimeRelation {
@@ -73,7 +77,12 @@ export interface Anime {
   popularity: number | null;
   season: 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL' | null;
   seasonYear: number | null;
+  startDate?: AnimeFuzzyDate | null;
   episodes: number | null;
+  airedEpisodes?: number;
+  lastAiredAt?: number | null;
+  latestAiredEpisode?: number;
+  isUnreleased?: boolean;
   duration: number | null; // minutes per ep
   status: 'FINISHED' | 'RELEASING' | 'NOT_YET_RELEASED' | 'CANCELLED' | 'HIATUS' | string;
   format: 'TV' | 'TV_SHORT' | 'MOVIE' | 'SPECIAL' | 'OVA' | 'ONA' | 'MUSIC' | string;
@@ -95,6 +104,9 @@ export interface Anime {
   };
   trailer?: AnimeTrailer | null;
   nextAiringEpisode?: AiringEpisode | null;
+  airingSchedule?: {
+    nodes: { id: number; episode: number; airingAt: number }[];
+  };
   relations?: {
     edges: AnimeRelation[];
   };
@@ -103,12 +115,32 @@ export interface Anime {
   };
 }
 
+export interface ConfirmedEpisodeItem {
+  episode: number;
+  airingAt: number | null;
+  confirmedBy: 'anilist' | 'provider';
+}
 
-export type WatchStatus = 'WATCHING' | 'PLANNING' | 'COMPLETED' | 'DROPPED';
+export interface ConfirmedEpisodesResponse {
+  anilistId: number;
+  status: string;
+  totalEpisodes: number | null;
+  airedEpisodes: ConfirmedEpisodeItem[];
+  nextAiringEpisode: {
+    episode: number;
+    airingAt: number;
+    timeUntilAiring: number;
+  } | null;
+}
+
+export type EpisodeStatus = 'released' | 'airing' | 'upcoming' | 'delayed' | 'unavailable';
+
+export type WatchStatus = 'WATCHING' | 'PLANNING' | 'COMPLETED' | 'FAVORITE' | 'DROPPED';
 
 export interface WatchlistItem {
   anime: Anime;
   status: WatchStatus;
+  isFavorite?: boolean;
   userScore: number | null; // 1-10
   lastWatchedEpisode: number;
   updatedAt: number; // timestamp
@@ -126,43 +158,60 @@ export interface WatchHistoryItem {
   timestamp: number;
 }
 
+export type ProviderId = 'yenime' | 'aniembed' | 'kuroko';
+export type ProviderMode = 'auto' | 'manual';
+
 export interface ProviderHealth {
-  id: string;
+  id: ProviderId;
   name: string;
-  status: 'healthy' | 'degraded' | 'offline';
-  latencyMs: number;
-  lastChecked: number;
+  priority: number;
   enabled: boolean;
-  notes?: string;
+  supportsDub: boolean;
+  status: 'healthy' | 'degraded' | 'offline' | 'unknown';
+  latencyMs: number | null;
+  lastChecked: number | null;
+  lastFailureAt: number | null;
+  lastFailureReason: string | null;
+  successCount: number;
+  failureCount: number;
 }
 
 export type AudioOption = 'sub' | 'dub';
 
-export interface StreamEmbedConfig {
-  providerId: 'jutsu';
+export interface ResolvedSource {
+  id: ProviderId;
+  name: string;
+  priority: number;
   url: string;
-  isIframe: boolean;
-  isHls?: boolean;
+  healthy: boolean;
+  latencyMs: number;
+  error?: string;
 }
 
-export type UserRole = 'admin' | 'moderator' | 'vip' | 'member' | 'USER';
+export interface SourcesResolutionResponse {
+  mode: 'auto' | ProviderId;
+  kurokoEnabled: boolean;
+  selected: ResolvedSource | null;
+  fallbacks: ResolvedSource[];
+  allEnabled: ResolvedSource[];
+  failedChecks: { id: ProviderId; name: string; reason: string }[];
+}
+
+export type UserRole = 'admin' | 'moderator' | 'vip' | 'member';
 export type UserStatus = 'active' | 'suspended' | 'pending';
 
 export interface UserAccount {
   id: string;
-  uid?: string;
   username: string;
   displayName: string;
   email: string;
   role: UserRole;
   status: UserStatus;
-  accountStatus?: UserStatus;
   avatarUrl?: string;
   bio?: string;
+  preferredProvider?: ProviderId;
+  providerMode?: ProviderMode;
   createdAt: number;
-  updatedAt?: number;
   lastLoginAt?: number;
   watchlistCount?: number;
-  passwordHash?: string;
 }
-
